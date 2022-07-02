@@ -235,7 +235,42 @@ QVector<dim>::value(const Point<dim> &p) const
 
 
 
+// #### Initial and Boundary Conditions ####
 
+// ## Initial Conditions ##
+template <int dim>
+class InitialConditions: public Function<dim>
+{
+public:
+  InitialConditions();
+
+  virtual double value(const Point<dim> &p,
+                      const unsigned int component = 0) const override;
+};
+
+template <int dim>
+InitialConditions<dim>::InitialConditions() {}
+
+template <int dim>
+double InitialConditions<dim>::value(const Point<dim> &p,
+                                    const unsigned int component) const
+{
+  double retVal = 0;
+#ifdef MMS
+  (void ) component;
+  for (int i = 0; i < dim; i++)
+  {
+    retVal += -Utilities::fixed_power<2,double>(p(i));
+  }
+  retVal += 6;
+#else
+  Assert(false, ExcNotImplemented());
+  retVal = 0.0;
+#endif
+  return retVal;
+}
+
+// ## End of Initial Conditions ##
 
 
 
