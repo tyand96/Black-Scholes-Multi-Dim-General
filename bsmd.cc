@@ -133,6 +133,114 @@ Tensor<1,dim> Solution<dim>::gradient(const Point<dim> &p,
 
 
 
+
+
+
+
+
+
+// ## A Matrix ##
+template <int dim>
+class AMatrix: public TensorFunction<2,dim>
+{
+public:
+  AMatrix();
+
+  virtual Tensor<2,dim>
+  value(const Point<dim> &p) const override;
+
+  Tensor<1,dim>
+  divergence(const Point<dim> &p) const;
+};
+
+// Constructor
+template <int dim>
+AMatrix<dim>::AMatrix()
+  : TensorFunction<2,dim>()
+{}
+
+template <int dim>
+Tensor<2,dim>
+AMatrix<dim>::value(const Point<dim> &p) const
+{
+  Tensor<2,dim> a_matrix;
+
+  for (unsigned int i = 0; i < dim; i++)
+  {
+    for (unsigned int j = 0; j < dim; j++)
+    {
+      a_matrix[i][j] = 0.5 * sigma[i]*sigma[j] * rho[i][j] * p(i)*p(j);
+    }
+  }
+
+  return a_matrix;
+}
+
+template <int dim>
+Tensor<1,dim>
+AMatrix<dim>::divergence(const Point<dim> &p) const
+{
+  Tensor<1,dim> div_vector;
+
+    for (unsigned int j=0; j<p.dimension; ++j)
+    {
+      for (unsigned int i=0; i<p.dimension; ++i)
+      {
+        div_vector[j] += 0.5*sigma[i]*sigma[j]*rho[i][j] * (p[j] + p[i]*(i==j?1:0));  
+      }
+    }
+
+    return div_vector;
+}
+
+// ## End of A Matrix ##
+
+
+
+
+
+
+
+// ## Q Vector ##
+template <int dim>
+class QVector: public TensorFunction<1,dim>
+{
+public:
+  QVector();
+
+  virtual Tensor<1,dim>
+  value(const Point<dim> &p) const override;
+};
+
+template <int dim>
+QVector<dim>::QVector()
+  : TensorFunction<1,dim>()
+{}
+
+template <int dim>
+Tensor<1,dim>
+QVector<dim>::value(const Point<dim> &p) const
+{
+  Tensor<1,dim> q_vector;
+
+  for (unsigned int i = 0; i < dim; i++)
+  {
+    q_vector[i] = interest_rate * p[i];
+  }
+
+  return q_vector;
+}
+
+// ## End of QVector ##
+
+
+
+
+
+
+
+
+
 int main()
 {
   Solution<dimension> sol;
@@ -140,4 +248,10 @@ int main()
   Tensor<1,dimension> test = sol.gradient(p);
 
   std::cout << test[1] << std::endl;
+
+
+  AMatrix<dimension> amatrixFunc;
+  
+  Tensor<2,dimension> amatrix = amatrixFunc.value(p);
+  std::cout << amatrix[1][1] << std::endl;
 }
