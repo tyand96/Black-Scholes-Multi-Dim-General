@@ -61,7 +61,7 @@ using namespace dealii;
 
 
 // ############### Begin setting parameters ###################
-  const unsigned int dimension = 3;
+  constexpr unsigned int dimension = 1;
   const unsigned int n_time_steps = 5;
   const double maturity_time = 1.0;
   double time_step = maturity_time / n_time_steps;
@@ -69,10 +69,12 @@ using namespace dealii;
   // double current_time = 0.0; 
   const double maximum_stock_price = 5.0;
   const double strike_price = 0.5;
-  const Tensor<2, dimension> rho({ {1,.5,.6}
-                                    ,{.5,1,.7}
-                                    ,{.6,.7,1}});
-  const Tensor<1, dimension> sigma( {.2,.2,.3} );
+  // const Tensor<2, dimension> rho({ {1,.5,.6}
+  //                                   ,{.5,1,.7}
+  //                                   ,{.6,.7,1}});
+  const Tensor<2,1> rho({{1}});
+  // const Tensor<1, dimension> sigma( {.2,.2,.3} );
+  const Tensor<1,1> sigma({.2});
   const double interest_rate = .05;
   #define MMS
 // ############### End setting parameters ###################
@@ -292,10 +294,33 @@ double InitialConditions<dim>::value(const Point<dim> &p,
 ************************* Black-Scholes Solver *********************************
 *******************************************************************************/
 
+/************************* Base Solver Definition *****************************/
+/******************************************************************************/
+class BlackScholesSolverBase
+{
+public:
+  BlackScholesSolverBase();
+
+  virtual std::map<uint64_t, Vector<double>>
+  do_one_timestep(const double current_time,
+                  const int finalProblemDim) const = 0;
+  
+  Vector<double> solution;
+
+protected:
+  double current_time;
+
+  SparseMatrix<double> mass_matrix;
+  SparseMatrix<double> b_matrix;
+  SparseMatrix<double> c_matrix;
+  
+  SparseMatrix<double> system_matrix;
+};
+
 /*********************** Template Solver Definition ***************************/
 /******************************************************************************/
 template <int dim>
-class BlackScholesSolver
+class BlackScholesSolver: public BlackScholesSolverBase
 {
 public:
   BlackScholesSolver();
@@ -305,43 +330,45 @@ public:
   std::map<uint64_t, Vector<double>> do_one_timestep(const double current_time,
                                                   const int finalProblemDim) const;
 
-  Vector<double> solution;
 
 private:
-  double current_time;
   BlackScholesSolver<dim-1> lowerDimSolver;
 };
 
 /************************* 1-D Solver Definition ******************************/
 /******************************************************************************/
 template<>
-class BlackScholesSolver<1>
+class BlackScholesSolver<1>: public BlackScholesSolverBase
 {
 public:
   BlackScholesSolver();
 
+  void setup_system();
+
   std::map<uint64_t, Vector<double>> do_one_timestep(const double current_time,
                                                     const int finalProblemDim) const;
 
-  Vector<double> solution;
-private:
-  double current_time;
 };
+
+/************************* Base Solver Constructor ****************************/
+/******************************************************************************/
+BlackScholesSolverBase::BlackScholesSolverBase()
+  : current_time(0)
+{}
 
 
 /********************** Template Solver Constructor ***************************/
 /******************************************************************************/
 template <int dim>
 BlackScholesSolver<dim>::BlackScholesSolver()
-  :current_time(0)
+  : BlackScholesSolverBase()
 {}
 
 
 /************************* 1-D Solver Constructor *****************************/
 /******************************************************************************/
-
 BlackScholesSolver<1>::BlackScholesSolver()
-  :current_time(0)
+  : BlackScholesSolverBase()
 {}
 
 /*********************** Template 'do_one_timestep' ***************************/
@@ -367,7 +394,6 @@ BlackScholesSolver<dim>::do_one_timestep(const double current_time,
 
 /************************** 1-D 'do_one_timestep' *****************************/
 /******************************************************************************/
-
 std::map<uint64_t, Vector<double>>
 BlackScholesSolver<1>::do_one_timestep(const double current_time,
                                       const int finalProblemDim) const
@@ -387,6 +413,12 @@ BlackScholesSolver<1>::do_one_timestep(const double current_time,
   return ret;
 }
 
+/**************************** 1-D 'setup_system' ******************************/
+/******************************************************************************/
+// void BlackScholesSolver<1>::setup_system()
+// {
+
+// }
 
 
 
@@ -394,16 +426,18 @@ BlackScholesSolver<1>::do_one_timestep(const double current_time,
 int main()
 {
   Solution<dimension> sol;
-  Point<dimension> p = {1,2,3};
+  // Point<dimension> p = {1,2,3};
+  Point<dimension> p(5);
+  std::cout << p(0) << std::endl;
   Tensor<1,dimension> test = sol.gradient(p);
 
-  std::cout << test[1] << std::endl;
+  std::cout << test[0] << std::endl;
 
 
   AMatrix<dimension> amatrixFunc;
   
   Tensor<2,dimension> amatrix = amatrixFunc.value(p);
-  std::cout << amatrix[1][1] << std::endl;
+  std::cout << amatrix[0][0] << std::endl;
 
   BlackScholesSolver<dimension> bsp;
   auto r = bsp.do_one_timestep(0,dimension);
