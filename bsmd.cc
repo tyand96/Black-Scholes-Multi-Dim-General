@@ -76,6 +76,7 @@ using namespace dealii;
   // const Tensor<1, dimension> sigma( {.2,.2,.3} );
   const Tensor<1,1> sigma({.2});
   const double interest_rate = .05;
+  constexpr unsigned int initial_global_refinement = 0;
   #define MMS
 // ############### End setting parameters ###################
 
@@ -284,9 +285,127 @@ double InitialConditions<dim>::value(const Point<dim> &p,
 
 // ## End of Initial Conditions ##
 
+/*******************************************************************************
+************************ Left Boundary Condition 1D ****************************
+*******************************************************************************/
+class LeftBoundary1D: public Function<1>
+{
+public:
+  LeftBoundary1D();
 
+  virtual double value(const Point<1> &p,
+                      const unsigned int component = 0) const override;
+};
 
+/********************** Left Boundary 1D Constructor **************************/
+/******************************************************************************/
+LeftBoundary1D::LeftBoundary1D()
+{}
 
+/************************ Left Boundary 1D 'value' ****************************/
+/******************************************************************************/
+double LeftBoundary1D::value(const Point<1> &p,
+                            const unsigned int component) const
+{
+  (void) p;
+  (void) component;
+  double ret = 0.0;
+#ifdef MMS
+  ret = -Utilities::fixed_power<2, double>(this->get_time()) + 6;
+#else
+  Assert(false, ExcNotImplemented());
+#endif
+
+  return ret;
+}
+
+/*******************************************************************************
+************************* Right Boundary Condition *****************************
+*******************************************************************************/
+template <int dim>
+class RightBoundary: public Function<dim>
+{
+public:
+  RightBoundary();
+
+  virtual double value(const Point<dim> &p,
+                      const unsigned int component = 0) const override;
+};
+
+/********************** Right Boundary Constructor ****************************/
+/******************************************************************************/
+template <int dim>
+RightBoundary<dim>::RightBoundary()
+{}
+
+/********************** Right Boundary Constructor ****************************/
+/******************************************************************************/
+template <int dim>
+double RightBoundary<dim>::value(const Point<dim> &p,
+                                const unsigned int component) const
+{
+  (void) component;
+  double ret =  0;
+#ifdef MMS
+  for (unsigned int d=0; d<dim; d++)
+  {
+    ret += -Utilities::fixed_power<2,double>(p(d)); 
+  }
+  ret += -Utilities::fixed_power<2,double>(this->get_time()) + 6;
+#else
+  Assert(false, ExcNotImplemented());
+  // for (unsigned int d=0; d<dim; ++d)
+  // {
+  //   ret += p(d);
+  // }
+  // ret -= strike_price * exp((-interest_rate) * (this->get_time()));
+#endif
+
+  return ret;
+}
+
+/*******************************************************************************
+************************ Right Hand Side Function ******************************
+*******************************************************************************/
+template <int dim>
+class RightHandSide: public Function<dim>
+{
+public:
+  RightHandSide();
+
+  virtual double value(const Point<dim> &p,
+                      const unsigned int component = 0) const;
+
+};
+
+/***************************** RHS Constructor ********************************/
+/******************************************************************************/
+template <int dim>
+RightHandSide<dim>::RightHandSide()
+{}
+
+/******************************* RHS 'value' **********************************/
+/******************************************************************************/
+template <int dim>
+double RightHandSide<dim>::value(const Point<dim> &p,
+                                const unsigned int component) const
+{
+  double ret = 0.0;
+#ifdef MMS
+  (void) component;
+  for (unsigned int d=0; d<dim; d++)
+  {
+    ret += -Utilities::fixed_power<2,double>(p(d) * sigma[d]);
+    ret += -Utilities::fixed_power<2,double>(p(d)) * interest_rate;
+  }
+  ret += this->get_time() * (2 + this->get_time() * interest_rate);
+  ret += 6 * interest_rate;
+#else
+  Assert(false, ExcNotImplemented());
+#endif
+
+  return ret;
+}
 
 
 
@@ -294,91 +413,454 @@ double InitialConditions<dim>::value(const Point<dim> &p,
 ************************* Black-Scholes Solver *********************************
 *******************************************************************************/
 
-/************************* Base Solver Definition *****************************/
+/*********************** Template Solver Definition ***************************/
 /******************************************************************************/
-class BlackScholesSolverBase
+template <int dim>
+class BlackScholesSolver
 {
 public:
-  BlackScholesSolverBase();
+  BlackScholesSolver();
 
-  virtual std::map<uint64_t, Vector<double>>
-  do_one_timestep(const double current_time,
-                  const int finalProblemDim) const = 0;
+  void refine_grid();
+
+  void create_mesh();
+  void initialize_matrices();
+  void build_matrices();
+
+  void build_b_matrix(FEValues<dim> &fe_values,
+                  std::vector<types::global_dof_index> &local_dof_indices,
+                  FullMatrix<double> cell_matrix);
+  void build_c_matrix(FEValues<dim> &fe_values,
+                  std::vector<types::global_dof_index> &local_dof_indices,
+                  FullMatrix<double> cell_matrix);
+  
+  void apply_boundary_ids();
+
+  void setup_system();
+  Vector<double> create_rhs_linear_system() const;
+  Vector<double> create_forcing_terms(const double curr_time) const;
+  SparseMatrix<double> create_system_matrix() const;
+  void impose_boundary_conditions();
+  void create_problem(const double curr_time);
+
+  // void setup_system();
+  // void create_problem();
+  std::map<uint64_t, Vector<double>> do_one_timestep(const double current_time,
+                                                  const int finalProblemDim);
+
+  void run();
   
   Vector<double> solution;
+private:
+  Triangulation<dim> triangulation;
+public:
+  DoFHandler<dim> dof_handler;
+private:
+  FE_Q<dim>          fe;
 
-protected:
+  AffineConstraints<double> constraints;
+
+  SparsityPattern      sparsity_pattern;
+
+  BlackScholesSolver<dim-1> lowerDimSolver;
+
   double current_time;
+
+  AMatrix<dim> a_matrix;
+  QVector<dim> q_vector;
 
   SparseMatrix<double> mass_matrix;
   SparseMatrix<double> b_matrix;
   SparseMatrix<double> c_matrix;
   
   SparseMatrix<double> system_matrix;
+
+  Vector<double> system_rhs;
 };
 
-/*********************** Template Solver Definition ***************************/
-/******************************************************************************/
-template <int dim>
-class BlackScholesSolver: public BlackScholesSolverBase
-{
-public:
-  BlackScholesSolver();
-
-  // void setup_system();
-  // void create_problem();
-  std::map<uint64_t, Vector<double>> do_one_timestep(const double current_time,
-                                                  const int finalProblemDim) const;
-
-
-private:
-  BlackScholesSolver<dim-1> lowerDimSolver;
-};
-
-/************************* 1-D Solver Definition ******************************/
+/************************* 0-D Solver Definition ******************************/
 /******************************************************************************/
 template<>
-class BlackScholesSolver<1>: public BlackScholesSolverBase
+class BlackScholesSolver<0>
 {
 public:
   BlackScholesSolver();
 
-  void setup_system();
-
-  std::map<uint64_t, Vector<double>> do_one_timestep(const double current_time,
-                                                    const int finalProblemDim) const;
-
 };
-
-/************************* Base Solver Constructor ****************************/
-/******************************************************************************/
-BlackScholesSolverBase::BlackScholesSolverBase()
-  : current_time(0)
-{}
-
 
 /********************** Template Solver Constructor ***************************/
 /******************************************************************************/
 template <int dim>
 BlackScholesSolver<dim>::BlackScholesSolver()
-  : BlackScholesSolverBase()
-{}
+  : dof_handler(triangulation)
+  , fe(1)
+  , current_time(0)
+{
+  GridGenerator::hyper_cube(triangulation, 0.0, maximum_stock_price, true);
+  triangulation.refine_global(initial_global_refinement);
+}
 
 
-/************************* 1-D Solver Constructor *****************************/
+/************************* 0-D Solver Constructor *****************************/
 /******************************************************************************/
-BlackScholesSolver<1>::BlackScholesSolver()
-  : BlackScholesSolverBase()
+BlackScholesSolver<0>::BlackScholesSolver()
 {}
+
+/************************* Template 'refine_grid' *****************************/
+/******************************************************************************/
+template <int dim>
+void BlackScholesSolver<dim>::refine_grid()
+{
+  triangulation.refine_global(1);
+}
+
+/************************* Template 'create_mesh' *****************************/
+/******************************************************************************/
+template <int dim>
+void BlackScholesSolver<dim>::create_mesh()
+{
+  dof_handler.distribute_dofs(fe);
+
+  constraints.clear();
+  DoFTools::make_hanging_node_constraints(dof_handler, constraints);
+  constraints.close();
+  DynamicSparsityPattern dsp(dof_handler.n_dofs());
+  DoFTools::make_sparsity_pattern(dof_handler,
+                                  dsp,
+                                  constraints,
+                                  /*keep_constrained_dofs = */ true);
+  sparsity_pattern.copy_from(dsp);
+}
+
+/******************** Template 'initialize_matrices' **************************/
+/******************************************************************************/
+template <int dim>
+void BlackScholesSolver<dim>::initialize_matrices()
+{
+  b_matrix.reinit(sparsity_pattern);
+  c_matrix.reinit(sparsity_pattern);
+  mass_matrix.reinit(sparsity_pattern);
+  system_matrix.reinit(sparsity_pattern);
+}
+
+/************************ Template 'build_matrices' ***************************/
+/******************************************************************************/
+template <int dim>
+void BlackScholesSolver<dim>::build_matrices()
+{
+  // Some setup first
+  const unsigned int dofs_per_cell = fe.dofs_per_cell;
+  FullMatrix<double> cell_matrix(dofs_per_cell, dofs_per_cell);
+  QGauss<dim>        quadrature_formula(fe.degree + 1);
+  FEValues<dim>      fe_values(fe,
+                          quadrature_formula,
+                          update_values | update_gradients |
+                            update_quadrature_points | update_JxW_values);
+  std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
+
+  // Next, to build the mass matrix
+  MatrixCreator::create_mass_matrix(dof_handler,
+                                      QGauss<dim>(fe.degree + 1),
+                                      mass_matrix);
+
+  // Build the 'B' matrix
+  build_b_matrix(fe_values, local_dof_indices, cell_matrix);
+
+  // Build the 'C' matrix
+  build_c_matrix(fe_values, local_dof_indices, cell_matrix);
+
+}
+
+/*********************** Template 'build_b_matrix' ****************************/
+/******************************************************************************/
+template <int dim>
+void BlackScholesSolver<dim>::build_b_matrix(FEValues<dim> &fe_values,
+                  std::vector<types::global_dof_index> &local_dof_indices,
+                  FullMatrix<double> cell_matrix)
+{
+  for (const auto &cell: dof_handler.active_cell_iterators())
+  {
+    cell_matrix = 0.;
+    fe_values.reinit(cell);
+    for (const unsigned int q_index: fe_values.quadrature_point_indices())
+    {
+      for (const unsigned i : fe_values.dof_indices())
+      {
+        for (const unsigned j : fe_values.dof_indices())
+        {
+          cell_matrix(i,j) +=
+            (
+              fe_values.shape_grad(i, q_index) * // grad phi_i
+              a_matrix.value(fe_values.quadrature_point(q_index)) * // A(S)
+              fe_values.shape_grad(j, q_index) * // grad phi_j
+              fe_values.JxW(q_index) // dx
+            );
+        }
+      }
+    }
+    cell->get_dof_indices(local_dof_indices);
+    for (const unsigned int i : fe_values.dof_indices())
+      {
+        for (const unsigned int j : fe_values.dof_indices())
+          b_matrix.add(local_dof_indices[i],
+                              local_dof_indices[j],
+                              cell_matrix(i, j));
+      }
+  }
+}
+
+/*********************** Template 'build_c_matrix' ****************************/
+/******************************************************************************/
+template <int dim>
+void BlackScholesSolver<dim>::build_c_matrix(FEValues<dim> &fe_values,
+                  std::vector<types::global_dof_index> &local_dof_indices,
+                  FullMatrix<double> cell_matrix)
+{
+  for (const auto &cell: dof_handler.active_cell_iterators())
+  {
+    cell_matrix = 0.;
+    fe_values.reinit(cell);
+    for (const unsigned int q_index: fe_values.quadrature_point_indices())
+    {
+      for (const unsigned i : fe_values.dof_indices())
+      {
+        for (const unsigned j : fe_values.dof_indices())
+        {
+          cell_matrix(i,j) +=
+            (
+              fe_values.shape_value(i, q_index) * // phi_i
+              (
+                a_matrix.divergence(fe_values.quadrature_point(q_index)) // divergence(A)
+                - q_vector.value(fe_values.quadrature_point(q_index)) // q_vector(S)
+              ) * 
+              fe_values.shape_grad(j, q_index) * // grad phi_j
+              fe_values.JxW(q_index) // dx
+            );
+        }
+      }
+    }
+    cell->get_dof_indices(local_dof_indices);
+    for (const unsigned int i : fe_values.dof_indices())
+      {
+        for (const unsigned int j : fe_values.dof_indices())
+          c_matrix.add(local_dof_indices[i],
+                              local_dof_indices[j],
+                              cell_matrix(i, j));
+      }
+  }
+}
+
+/********************* Template 'apply_boundary_ids' **************************/
+/******************************************************************************/
+template <int dim>
+void BlackScholesSolver<dim>::apply_boundary_ids()
+{
+  // std::cout << "DIM: " << dim << std::endl;
+  for (const auto &cell : triangulation.active_cell_iterators())
+  {
+    for (auto &face : cell->face_iterators())
+    {
+      // If the face is on the boundary, then I need to check if it lies on the
+      // "origin corner".
+      if (face->at_boundary())
+      {
+        // First, I am going to set the boundary id to an 'invalid' one.
+        // This is because, in case the face is at the boundary but not on the
+        // corner, I can know by looking at the boundary id
+        face->set_boundary_id(0);
+
+        // To check where the face is, I will look at it's center
+        const auto center = face->center();
+        for (unsigned int i=0; i<dim; i++)
+        {
+          // A value of zero indicates that the face is on the corner
+          if ((std::fabs(center(i) - (0.0)) < 1e-12))
+          {
+            face->set_boundary_id(1<<i);
+            
+            // Only one element of 'center' can be zero.
+            break;
+          }
+        }
+      }
+      // std::cout << (int64_t)face->boundary_id() << ": " << face->at_boundary() << std::endl;
+    }
+  }
+}
+
+/************************* Template 'setup_system' ****************************/
+/******************************************************************************/
+template <int dim>
+void BlackScholesSolver<dim>::setup_system()
+{
+  create_mesh();
+
+  initialize_matrices();
+  build_matrices();
+
+  // Index through faces and determine which faces correspond to the
+  // initial conditions
+  apply_boundary_ids();
+
+  // Initialize system and solution vectors
+  solution.reinit(dof_handler.n_dofs());
+  system_rhs.reinit(dof_handler.n_dofs());
+
+  // Apply initial conditions
+  VectorTools::interpolate(dof_handler,
+                            InitialConditions<dim>(),
+                            solution);
+
+}
+
+/******************** Template 'create_rhs_linear_system' *********************/
+/******************************************************************************/
+template <int dim>
+Vector<double> BlackScholesSolver<dim>::create_rhs_linear_system() const
+{
+  // I will compute the right hand side of the linear system
+  // This is:
+  // \left(\left(1-k_nr\right)\mathbf{M} - \frac{1}{2}k_n\mathbf{B} - k_n\mathbf{C}\right)V^{n-1}
+  Vector<double> ret_rhs;
+  ret_rhs.reinit(dof_handler.n_dofs());
+
+
+  // Set up vector to hold temporary multiplication result
+  Vector<double> vmult_result;
+  vmult_result.reinit(dof_handler.n_dofs());
+
+  // Now, to compute the right hand side of the linear system
+  mass_matrix.vmult(vmult_result, solution);
+  ret_rhs.add(
+    1 - (time_step * interest_rate), vmult_result
+  );
+
+  b_matrix.vmult(vmult_result, solution);
+  ret_rhs.add(
+    (-1) * time_step, vmult_result
+  );
+
+  c_matrix.vmult(vmult_result, solution);
+  ret_rhs.add(
+    (-1) * time_step, vmult_result
+  );
+
+  // Add the forcing terms
+
+  return ret_rhs;
+}
+
+/********************** Template 'create_forcing_terms' ***********************/
+/******************************************************************************/
+template <int dim>
+Vector<double> BlackScholesSolver<dim>::create_forcing_terms(const double curr_time) const
+{
+  // I will compute the forcing terms 
+  // This is:
+  // -k_nF^n
+  Vector<double> ret_forcing_terms;
+  ret_forcing_terms.reinit(dof_handler.n_dofs());
+
+  // Compute the forcing terms
+  RightHandSide<dim> rhs_function;
+  rhs_function.set_time(curr_time);
+
+  VectorTools::create_right_hand_side(dof_handler,
+                                      QGauss<dim>(fe.degree + 1),
+                                      rhs_function,
+                                      ret_forcing_terms);
+  ret_forcing_terms *= (-1) * time_step;
+
+  return ret_forcing_terms;
+
+}
+
+/********************** Template 'create_system_matrix' ***********************/
+/******************************************************************************/
+template <int dim>
+SparseMatrix<double> BlackScholesSolver<dim>::create_system_matrix() const
+{
+  // I will compute the left hand side of the linear system
+  // This is:
+  // \mathbf{M} + \frac{1}{2}k_n\mathbf{B}
+  SparseMatrix<double> ret_system_matrix;
+  ret_system_matrix.reinit(sparsity_pattern);
+
+  // Compute the left hand side of the linear system
+  ret_system_matrix.add(
+    1, mass_matrix
+  );
+
+  ret_system_matrix.add(
+    0.5 * time_step, b_matrix
+  );
+
+  return ret_system_matrix;
+}
+
+/**************** Template 'interpolate_boundary_conditions' ******************/
+/******************************************************************************/
+template <int dim>
+void BlackScholesSolver<dim>::impose_boundary_conditions()
+{
+  Assert(false, ExcNotImplemented());
+}
+
+/****************** 1-D 'impose_boundary_conditions' *********************/
+/******************************************************************************/
+template <>
+void BlackScholesSolver<1>::impose_boundary_conditions()
+{
+  RightBoundary<1> right_boundary_function;
+  LeftBoundary1D left_boundary_function;
+  right_boundary_function.set_time(current_time);
+  left_boundary_function.set_time(current_time);
+  std::map<types::global_dof_index, double> boundary_values;
+  VectorTools::interpolate_boundary_values(dof_handler,
+                                            1,
+                                            left_boundary_function,
+                                            boundary_values);
+  VectorTools::interpolate_boundary_values(dof_handler,
+                                            0,
+                                            right_boundary_function,
+                                            boundary_values);
+  MatrixTools::apply_boundary_values(boundary_values,
+                                      system_matrix,
+                                      solution,
+                                      system_rhs);
+}
+
+/************************ Template 'create_problem' ***************************/
+/******************************************************************************/
+template <int dim>
+void BlackScholesSolver<dim>::create_problem(const double curr_time)
+{
+  // Set up vectors to hold temporary data
+  Vector<double> forcing_terms;
+
+  // Initialize these vectors
+  forcing_terms.reinit(dof_handler.n_dofs());
+  system_rhs.reinit(dof_handler.n_dofs());
+
+  system_rhs = create_rhs_linear_system();
+  system_rhs += create_forcing_terms(curr_time);
+
+  // Next, create the system matrix that needs to be inverted at every timestep
+  system_matrix = create_system_matrix();
+
+  constraints.condense(system_matrix, system_rhs);
+
+  impose_boundary_conditions();
+}
 
 /*********************** Template 'do_one_timestep' ***************************/
 /******************************************************************************/
 template <int dim>
 std::map<uint64_t, Vector<double>>
-BlackScholesSolver<dim>::do_one_timestep(const double current_time,
-                                        const int finalProblemDim) const
+BlackScholesSolver<dim>::do_one_timestep(const double curr_time,
+                                        const int finalProblemDim)
 {
-  std::map<uint64_t, Vector<double>> lowerDimSol = lowerDimSolver.do_one_timestep(current_time, dim);
+  std::map<uint64_t, Vector<double>> lowerDimSol = lowerDimSolver.do_one_timestep(curr_time, dim);
   Vector<double> vec({4,5,6});
   std::map<uint64_t, Vector<double>> ret;
 
@@ -386,7 +868,14 @@ BlackScholesSolver<dim>::do_one_timestep(const double current_time,
 
   for (uint64_t i = 0; i < num_solutions; i++)
   {
-    ret[(1<<i)] = vec;
+    SolverControl                          solver_control(1000, 1e-12);
+    SolverCG<Vector<double>>               cg(solver_control);
+    PreconditionSSOR<SparseMatrix<double>> preconditioner;
+    preconditioner.initialize(system_matrix, 1.0);
+    cg.solve(system_matrix, solution, system_rhs, preconditioner);
+    constraints.distribute(solution);
+
+    ret[(1<<i)] = solution;
   }
 
   return ret;
@@ -394,9 +883,10 @@ BlackScholesSolver<dim>::do_one_timestep(const double current_time,
 
 /************************** 1-D 'do_one_timestep' *****************************/
 /******************************************************************************/
+template<>
 std::map<uint64_t, Vector<double>>
-BlackScholesSolver<1>::do_one_timestep(const double current_time,
-                                      const int finalProblemDim) const
+BlackScholesSolver<1>::do_one_timestep(const double curr_time,
+                                      const int finalProblemDim)
 {
   Vector<double> vec({1,2,3});
   std::map<uint64_t, Vector<double>> ret;
@@ -405,10 +895,22 @@ BlackScholesSolver<1>::do_one_timestep(const double current_time,
 
   for (uint64_t i = 0; i < num_solutions; i++)
   {
-    ret[(1<<i)] = vec;
+    SolverControl                          solver_control(1000, 1e-12);
+    SolverCG<Vector<double>>               cg(solver_control);
+    PreconditionSSOR<SparseMatrix<double>> preconditioner;
+    preconditioner.initialize(system_matrix, 1.0);
+    cg.solve(system_matrix, solution, system_rhs, preconditioner);
+    constraints.distribute(solution);
+
+    ret[(1<<i)] = solution;
   }
 
-  std::cout << "1D " << ret[1][0] << std::endl;
+  std::cout << "1D currTime: " << curr_time << "... ";
+  for (const auto &p: ret[1])
+  {
+    std::cout << p << " ";
+  }
+  std::cout << std::endl;
 
   return ret;
 }
@@ -420,6 +922,22 @@ BlackScholesSolver<1>::do_one_timestep(const double current_time,
 
 // }
 
+
+/***************************** Template 'run' *********************************/
+/******************************************************************************/
+template <int dim>
+void BlackScholesSolver<dim>::run()
+{
+  setup_system();
+
+  while (current_time < maturity_time)
+  {
+    create_problem(current_time);
+    do_one_timestep(current_time, dim);
+
+    current_time += time_step;
+  }
+}
 
 
 
@@ -440,6 +958,11 @@ int main()
   std::cout << amatrix[0][0] << std::endl;
 
   BlackScholesSolver<dimension> bsp;
-  auto r = bsp.do_one_timestep(0,dimension);
-  std::cout << r[1][0] << std::endl;
+  // auto r = bsp.do_one_timestep(0,dimension);
+  // std::cout << r[1][0] << std::endl;
+  // bsp.apply_boundary_ids();
+
+  // // BlackScholesSolver<2> testSolver;
+  // // testSolver.apply_boundary_ids();
+  bsp.run();
 }
