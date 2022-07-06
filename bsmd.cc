@@ -286,6 +286,17 @@ double InitialConditions<dim>::value(const Point<dim> &p,
 // ## End of Initial Conditions ##
 
 /*******************************************************************************
+********************* Container for Computed Solutions *************************
+*******************************************************************************/
+template <int dim>
+struct ComputedSolution
+{
+  DoFHandler<dim> dof_handler;
+
+  Vector<double> solutionVec;
+};
+
+/*******************************************************************************
 ************************ Left Boundary Condition 1D ****************************
 *******************************************************************************/
 class LeftBoundary1D: public Function<1>
@@ -440,13 +451,12 @@ public:
   Vector<double> create_rhs_linear_system() const;
   Vector<double> create_forcing_terms(const double curr_time) const;
   SparseMatrix<double> create_system_matrix() const;
-  void impose_boundary_conditions();
+  void impose_boundary_conditions(const double curr_time);
   void create_problem(const double curr_time);
 
   // void setup_system();
   // void create_problem();
-  std::map<uint64_t, Vector<double>> do_one_timestep(const double current_time,
-                                                  const int finalProblemDim);
+  std::map<uint64_t, Vector<double>> do_one_timestep(const int finalProblemDim);
   
   void process_solution(const double curr_time);
   void write_convergence_table();
@@ -495,6 +505,9 @@ class BlackScholesSolver<0>
 {
 public:
   BlackScholesSolver();
+
+  void setup_system();
+  void create_problem(const double curr_time);
 
 };
 
@@ -698,6 +711,11 @@ void BlackScholesSolver<dim>::apply_boundary_ids()
   }
 }
 
+/*************************** 0-D 'setup_system' *******************************/
+/******************************************************************************/
+void BlackScholesSolver<0>::setup_system()
+{}
+
 /************************* Template 'setup_system' ****************************/
 /******************************************************************************/
 template <int dim>
@@ -720,6 +738,9 @@ void BlackScholesSolver<dim>::setup_system()
   VectorTools::interpolate(dof_handler,
                             InitialConditions<dim>(),
                             solution);
+  
+  // Setup lower-dim 
+  lowerDimSolver.setup_system();
   // output_results(0);
 }
 
@@ -823,20 +844,27 @@ SparseMatrix<double> BlackScholesSolver<dim>::create_system_matrix() const
 /**************** Template 'interpolate_boundary_conditions' ******************/
 /******************************************************************************/
 template <int dim>
-void BlackScholesSolver<dim>::impose_boundary_conditions()
+void BlackScholesSolver<dim>::impose_boundary_conditions(const double curr_time)
 {
-  Assert(false, ExcNotImplemented());
+  (void) curr_time;
+  std::map<uint64_t, Vector<double>> lowerDimSol = lowerDimSolver.do_one_timestep(dim);
+  for (const auto &boundary: lowerDimSol)
+  {
+    // Get a function for the lower dimensional solution
+    Functions::FEFieldFunction<dim-1> SolutionLD(lowerDimSolver.dof_handler,
+                                                boundary.second);
+  }
 }
 
 /****************** 1-D 'impose_boundary_conditions' *********************/
 /******************************************************************************/
 template <>
-void BlackScholesSolver<1>::impose_boundary_conditions()
+void BlackScholesSolver<1>::impose_boundary_conditions(const double curr_time)
 {
   RightBoundary<1> right_boundary_function;
   LeftBoundary1D left_boundary_function;
-  right_boundary_function.set_time(current_time);
-  left_boundary_function.set_time(current_time);
+  right_boundary_function.set_time(curr_time);
+  left_boundary_function.set_time(curr_time);
   std::map<types::global_dof_index, double> boundary_values;
   VectorTools::interpolate_boundary_values(dof_handler,
                                             1,
@@ -850,6 +878,13 @@ void BlackScholesSolver<1>::impose_boundary_conditions()
                                       system_matrix,
                                       solution,
                                       system_rhs);
+}
+
+/*************************** 0-D 'create_problem' *****************************/
+/******************************************************************************/
+void BlackScholesSolver<0>::create_problem(const double curr_time)
+{
+  (void) curr_time;
 }
 
 /************************ Template 'create_problem' ***************************/
@@ -872,17 +907,16 @@ void BlackScholesSolver<dim>::create_problem(const double curr_time)
 
   constraints.condense(system_matrix, system_rhs);
 
-  impose_boundary_conditions();
+  impose_boundary_conditions(curr_time);
 }
 
 /*********************** Template 'do_one_timestep' ***************************/
 /******************************************************************************/
 template <int dim>
 std::map<uint64_t, Vector<double>>
-BlackScholesSolver<dim>::do_one_timestep(const double curr_time,
-                                        const int finalProblemDim)
+BlackScholesSolver<dim>::do_one_timestep(const int finalProblemDim)
 {
-  std::map<uint64_t, Vector<double>> lowerDimSol = lowerDimSolver.do_one_timestep(curr_time, dim);
+  // std::map<uint64_t, ComputedSolution<dim-1>> lowerDimSol = lowerDimSolver.do_one_timestep(curr_time, dim);
   Vector<double> vec({4,5,6});
   std::map<uint64_t, Vector<double>> ret;
 
@@ -907,10 +941,8 @@ BlackScholesSolver<dim>::do_one_timestep(const double curr_time,
 /******************************************************************************/
 template<>
 std::map<uint64_t, Vector<double>>
-BlackScholesSolver<1>::do_one_timestep(const double curr_time,
-                                      const int finalProblemDim)
+BlackScholesSolver<1>::do_one_timestep(const int finalProblemDim)
 {
-  (void) curr_time;
   std::map<uint64_t, Vector<double>> ret;
 
   uint64_t num_solutions = choose(finalProblemDim, 1);
@@ -1113,7 +1145,7 @@ void BlackScholesSolver<dim>::run()
   while (current_time < maturity_time)
   {
     create_problem(current_time);
-    do_one_timestep(current_time, dim);
+    do_one_timestep(dim);
 
     current_time += time_step;
 
