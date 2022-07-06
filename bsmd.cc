@@ -62,12 +62,12 @@ using namespace dealii;
 
 // ############### Begin setting parameters ###################
   constexpr unsigned int dimension = 1;
-  const unsigned int n_time_steps = 100;
+  const unsigned int n_time_steps = 5000;
   const double maturity_time = 1.0;
   double time_step = maturity_time / n_time_steps;
   // unsigned int timestep_number = 0;
   // double current_time = 0.0; 
-  const double maximum_stock_price = 5.0;
+  const double maximum_stock_price = 1.0;
   const double strike_price = 0.5;
   // const Tensor<2, dimension> rho({ {1,.5,.6}
   //                                   ,{.5,1,.7}
@@ -311,7 +311,7 @@ double LeftBoundary1D::value(const Point<1> &p,
   (void) component;
   double ret = 0.0;
 #ifdef MMS
-  ret = -Utilities::fixed_power<2, double>(this->get_time()) + 6;
+  ret += -Utilities::fixed_power<2, double>(this->get_time()) + 6;
 #else
   Assert(false, ExcNotImplemented());
 #endif
@@ -399,7 +399,7 @@ double RightHandSide<dim>::value(const Point<dim> &p,
     ret += -Utilities::fixed_power<2,double>(p(d)) * interest_rate;
   }
   ret += this->get_time() * (2 + this->get_time() * interest_rate);
-  ret += 6 * interest_rate;
+  ret -= 6 * interest_rate;
 #else
   Assert(false, ExcNotImplemented());
 #endif
@@ -451,6 +451,8 @@ public:
   void process_solution(const double curr_time);
   void write_convergence_table();
 
+  void output_results(const double curr_time);
+
   void run();
   
   Vector<double> solution;
@@ -481,6 +483,9 @@ private:
   Vector<double> system_rhs;
 
   ConvergenceTable convergence_table;
+
+  DataOutStack<dim> data_out_stack;
+  std::vector<std::string> solution_names;
 };
 
 /************************* 0-D Solver Definition ******************************/
@@ -715,7 +720,7 @@ void BlackScholesSolver<dim>::setup_system()
   VectorTools::interpolate(dof_handler,
                             InitialConditions<dim>(),
                             solution);
-
+  // output_results(0);
 }
 
 /******************** Template 'create_rhs_linear_system' *********************/
@@ -737,12 +742,12 @@ Vector<double> BlackScholesSolver<dim>::create_rhs_linear_system() const
   // Now, to compute the right hand side of the linear system
   mass_matrix.vmult(vmult_result, solution);
   ret_rhs.add(
-    1 - (time_step * interest_rate), vmult_result
+    1 - 0.5 * (time_step * interest_rate), vmult_result
   );
 
   b_matrix.vmult(vmult_result, solution);
   ret_rhs.add(
-    (-1) * time_step, vmult_result
+    (-1) * 0.5 * time_step, vmult_result
   );
 
   c_matrix.vmult(vmult_result, solution);
@@ -764,6 +769,8 @@ Vector<double> BlackScholesSolver<dim>::create_forcing_terms(const double curr_t
   // This is:
   // -k_nF^n
   Vector<double> ret_forcing_terms;
+  Vector<double> tmp;
+  tmp.reinit(dof_handler.n_dofs());
   ret_forcing_terms.reinit(dof_handler.n_dofs());
 
   // Compute the forcing terms
@@ -773,8 +780,18 @@ Vector<double> BlackScholesSolver<dim>::create_forcing_terms(const double curr_t
   VectorTools::create_right_hand_side(dof_handler,
                                       QGauss<dim>(fe.degree + 1),
                                       rhs_function,
-                                      ret_forcing_terms);
-  ret_forcing_terms *= (-1) * time_step;
+                                      tmp);
+  tmp *= (-1) * 0.5 * time_step;
+  ret_forcing_terms += tmp;
+
+  rhs_function.set_time(curr_time - time_step);
+
+  VectorTools::create_right_hand_side(dof_handler,
+                                      QGauss<dim>(fe.degree + 1),
+                                      rhs_function,
+                                      tmp);
+  tmp *= (-1) * 0.5 * time_step;
+  ret_forcing_terms += tmp;
 
   return ret_forcing_terms;
 
@@ -793,7 +810,7 @@ SparseMatrix<double> BlackScholesSolver<dim>::create_system_matrix() const
 
   // Compute the left hand side of the linear system
   ret_system_matrix.add(
-    1, mass_matrix
+    1 + 0.5*time_step * interest_rate, mass_matrix
   );
 
   ret_system_matrix.add(
@@ -929,37 +946,74 @@ void BlackScholesSolver<dim>::process_solution(const double curr_time)
   sol.set_time(curr_time);
   Vector<float> difference_per_cell(triangulation.n_active_cells());
   VectorTools::integrate_difference(dof_handler,
-                                    solution,
-                                    sol,
-                                    difference_per_cell,
-                                    QGauss<dim>(fe.degree + 1),
-                                    VectorTools::L2_norm);
+                                  solution,
+                                  sol,
+                                  difference_per_cell,
+                                  QGauss<dim>(fe.degree + 1),
+                                  VectorTools::L2_norm);
   const double L2_error =
-    VectorTools::compute_global_error(triangulation,
+  VectorTools::compute_global_error(triangulation,
                                       difference_per_cell,
                                       VectorTools::L2_norm);
   VectorTools::integrate_difference(dof_handler,
-                                    solution,
-                                    sol,
-                                    difference_per_cell,
-                                    QGauss<dim>(fe.degree + 1),
-                                    VectorTools::H1_seminorm);
+                                  solution,
+                                  sol,
+                                  difference_per_cell,
+                                  QGauss<dim>(fe.degree + 1),
+                                  VectorTools::H1_seminorm);
   const double H1_error =
-    VectorTools::compute_global_error(triangulation,
+  VectorTools::compute_global_error(triangulation,
                                       difference_per_cell,
                                       VectorTools::H1_seminorm);
-  const QTrapez<1>  q_trapezoid;
-  const QIterated<dim> q_iterated(q_trapezoid, fe.degree * 2 + 1);
+  const QTrapez<1>     q_trapez;
+  const QIterated<dim> q_iterated(q_trapez, fe.degree * 2 + 1);
   VectorTools::integrate_difference(dof_handler,
-                                    solution,
-                                    sol,
-                                    difference_per_cell,
-                                    q_iterated,
-                                    VectorTools::Linfty_norm);
+                                  solution,
+                                  sol,
+                                  difference_per_cell,
+                                  q_iterated,
+                                  VectorTools::Linfty_norm);
   const double Linfty_error =
-    VectorTools::compute_global_error(triangulation,
+  VectorTools::compute_global_error(triangulation,
                                       difference_per_cell,
                                       VectorTools::Linfty_norm);
+  // Solution<dim> sol;
+  // sol.set_time(curr_time);
+  // std::cout << "COMPUTED: ";solution.print(std::cout);
+  // std::cout << "THEORY: " << sol.value(Point<1>(0)) << " " << sol.value(Point<1>(1)) << std::endl;
+  // Vector<float> difference_per_cell(triangulation.n_active_cells());
+  // VectorTools::integrate_difference(dof_handler,
+  //                                   solution,
+  //                                   sol,
+  //                                   difference_per_cell,
+  //                                   QGauss<dim>(fe.degree + 1),
+  //                                   VectorTools::L2_norm);
+  // const double L2_error =
+  //   VectorTools::compute_global_error(triangulation,
+  //                                     difference_per_cell,
+  //                                     VectorTools::L2_norm);
+  // VectorTools::integrate_difference(dof_handler,
+  //                                   solution,
+  //                                   sol,
+  //                                   difference_per_cell,
+  //                                   QGauss<dim>(fe.degree + 1),
+  //                                   VectorTools::H1_seminorm);
+  // const double H1_error =
+  //   VectorTools::compute_global_error(triangulation,
+  //                                     difference_per_cell,
+  //                                     VectorTools::H1_seminorm);
+  // const QTrapez<1>  q_trapezoid;
+  // const QIterated<dim> q_iterated(q_trapezoid, fe.degree * 2 + 1);
+  // VectorTools::integrate_difference(dof_handler,
+  //                                   solution,
+  //                                   sol,
+  //                                   difference_per_cell,
+  //                                   q_iterated,
+  //                                   VectorTools::Linfty_norm);
+  // const double Linfty_error =
+  //   VectorTools::compute_global_error(triangulation,
+  //                                     difference_per_cell,
+  //                                     VectorTools::Linfty_norm);
   const unsigned int n_active_cells = triangulation.n_active_cells();
   const unsigned int n_dofs         = dof_handler.n_dofs();
   convergence_table.add_value("cells", n_active_cells);
@@ -1029,12 +1083,31 @@ void BlackScholesSolver<dim>::write_convergence_table()
   convergence_table.write_tex(table_file);
 }
 
+/*********************** Template 'output_results' ****************************/
+/******************************************************************************/
+template<>
+void BlackScholesSolver<1>::output_results(const double curr_time)
+{
+  data_out_stack.new_parameter_value(curr_time, time_step);
+  data_out_stack.attach_dof_handler (dof_handler);
+  data_out_stack.add_data_vector (solution, solution_names);
+  data_out_stack.build_patches (2);
+  data_out_stack.finish_parameter_value ();
+}
+
 
 /***************************** Template 'run' *********************************/
 /******************************************************************************/
 template <int dim>
 void BlackScholesSolver<dim>::run()
 {
+  current_time = 0.0;
+  // /*
+  //       This sets up the output data.
+  //       */
+  //       solution_names.emplace_back("u");
+  //       data_out_stack.declare_data_vector(solution_names,
+  //                                           DataOutStack<dim>::dof_vector);
   setup_system();
 
   while (current_time < maturity_time)
@@ -1043,7 +1116,12 @@ void BlackScholesSolver<dim>::run()
     do_one_timestep(current_time, dim);
 
     current_time += time_step;
+
+    // output_results(current_time);
   }
+  // const std::string filename = "solution.vtk";
+  //       std::ofstream output(filename);
+  //       data_out_stack.write_vtk(output);
 }
 
 
@@ -1067,13 +1145,28 @@ int main()
   BlackScholesSolver<dimension> bsp;
   for (unsigned int cycle = 0; cycle < 8; cycle++)
   {
-    bsp.refine_grid();
-
     bsp.run();
 
     bsp.process_solution(maturity_time);
+
+    bsp.refine_grid();
   }
   bsp.write_convergence_table();
+
+
+  // bsp.run();
+  // bsp.process_solution(maturity_time);
+  // bsp.write_convergence_table();
+
+  // RightBoundary<1> rt;
+  // rt.set_time(1);
+  // std::cout << "RIGHT: " << rt.value(Point<1>(3)) << std::endl;
+
+  // Solution<1> sol;
+  // sol.set_time(maturity_time);
+  
+
+
   // auto r = bsp.do_one_timestep(0,dimension);
   // std::cout << r[1][0] << std::endl;
   // bsp.apply_boundary_ids();
