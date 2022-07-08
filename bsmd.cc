@@ -90,6 +90,12 @@ uint64_t choose(uint64_t n, uint64_t k)
   return (n * choose(n-1, k-1) / k);
 }
 
+uint64_t boundary_id(const uint64_t missing_axis, const uint64_t finalDim)
+{
+  uint64_t full_bits = (1 << (finalDim + 1)) - 1;
+  return full_bits ^ (1 << missing_axis);
+}
+
 // ### MMS Solution ###
 #ifdef MMS
 template <int dim>
@@ -430,7 +436,7 @@ template <int dim>
 class BlackScholesSolver
 {
 public:
-  BlackScholesSolver();
+  BlackScholesSolver(const int finalDim = dim);
 
   void refine_grid();
 
@@ -478,6 +484,7 @@ private:
   SparsityPattern      sparsity_pattern;
 
   BlackScholesSolver<dim-1> lowerDimSolver;
+  std::map<uint64_t, std::unique_ptr<BlackScholesSolver<dim-1>>> lower_dim_solvers;
 
   double current_time;
 
@@ -492,6 +499,9 @@ private:
 
   Vector<double> system_rhs;
 
+  uint64_t num_solutions;
+  uint64_t final_dim;
+
   ConvergenceTable convergence_table;
 
   DataOutStack<dim> data_out_stack;
@@ -504,7 +514,7 @@ template<>
 class BlackScholesSolver<0>
 {
 public:
-  BlackScholesSolver();
+  BlackScholesSolver(const uint64_t finalDim = 0);
 
   void setup_system();
   void create_problem(const double curr_time);
@@ -514,20 +524,25 @@ public:
 /********************** Template Solver Constructor ***************************/
 /******************************************************************************/
 template <int dim>
-BlackScholesSolver<dim>::BlackScholesSolver()
+BlackScholesSolver<dim>::BlackScholesSolver(const int finalDim)
   : dof_handler(triangulation)
   , fe(1)
   , current_time(0)
+  , final_dim(finalDim)
 {
   GridGenerator::hyper_cube(triangulation, 0.0, maximum_stock_price, true);
   triangulation.refine_global(initial_global_refinement);
+
+  num_solutions = choose(finalDim, dim);
 }
 
 
 /************************* 0-D Solver Constructor *****************************/
 /******************************************************************************/
-BlackScholesSolver<0>::BlackScholesSolver()
-{}
+BlackScholesSolver<0>::BlackScholesSolver(const uint64_t finalDim)
+{
+  (void) finalDim;
+}
 
 /************************* Template 'refine_grid' *****************************/
 /******************************************************************************/
@@ -739,7 +754,13 @@ void BlackScholesSolver<dim>::setup_system()
                             InitialConditions<dim>(),
                             solution);
   
-  // Setup lower-dim 
+  // For each of the lower dimensional solutions, set up the system
+  for (uint64_t boundary = 0; boundary < num_solutions; boundary++)
+  {
+    uint64_t b_id = boundary_id(boundary, final_dim);
+    lower_dim_solvers[b_id] = std::make_unique<BlackScholesSolver<dim-1>>(final_dim);
+    lower_dim_solvers[b_id]->setup_system();
+  }
   lowerDimSolver.setup_system();
   // output_results(0);
 }
