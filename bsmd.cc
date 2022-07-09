@@ -62,7 +62,7 @@ using namespace dealii;
 
 // ############### Begin setting parameters ###################
   constexpr unsigned int dimension = 1;
-  const unsigned int n_time_steps = 5000;
+  const unsigned int n_time_steps = 400;
   const double maturity_time = 1.0;
   double time_step = maturity_time / n_time_steps;
   // unsigned int timestep_number = 0;
@@ -92,7 +92,7 @@ uint64_t choose(uint64_t n, uint64_t k)
 
 uint64_t boundary_id(const uint64_t missing_axis, const uint64_t finalDim)
 {
-  uint64_t full_bits = (1 << (finalDim + 1)) - 1;
+  uint64_t full_bits = (1 << finalDim) - 1;
   return full_bits ^ (1 << missing_axis);
 }
 
@@ -705,7 +705,8 @@ void BlackScholesSolver<dim>::apply_boundary_ids()
         // First, I am going to set the boundary id to an 'invalid' one.
         // This is because, in case the face is at the boundary but not on the
         // corner, I can know by looking at the boundary id
-        face->set_boundary_id(0);
+        // If we're in the 1D case, then, set the invalid state to 1.
+        face->set_boundary_id(-2);
 
         // To check where the face is, I will look at it's center
         const auto center = face->center();
@@ -714,7 +715,10 @@ void BlackScholesSolver<dim>::apply_boundary_ids()
           // A value of zero indicates that the face is on the corner
           if ((std::fabs(center(i) - (0.0)) < 1e-12))
           {
-            face->set_boundary_id(1<<i);
+            // std::cout << "MISSING AXIS: " << i << std::endl;
+            // std::cout << "CENTER: " << center(i) << std::endl;
+            // std::cout << "BOUNDARY ID: " << boundary_id(i, final_dim) << std::endl;
+            face->set_boundary_id(boundary_id(i, final_dim));
             
             // Only one element of 'center' can be zero.
             break;
@@ -888,11 +892,11 @@ void BlackScholesSolver<1>::impose_boundary_conditions(const double curr_time)
   left_boundary_function.set_time(curr_time);
   std::map<types::global_dof_index, double> boundary_values;
   VectorTools::interpolate_boundary_values(dof_handler,
-                                            1,
+                                            0,
                                             left_boundary_function,
                                             boundary_values);
   VectorTools::interpolate_boundary_values(dof_handler,
-                                            0,
+                                            -2,
                                             right_boundary_function,
                                             boundary_values);
   MatrixTools::apply_boundary_values(boundary_values,
