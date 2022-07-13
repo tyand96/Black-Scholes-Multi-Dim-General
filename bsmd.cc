@@ -64,7 +64,7 @@ using namespace dealii;
 
 // ############### Begin setting parameters ###################
   constexpr unsigned int dimension = 3;
-  const unsigned int n_time_steps = 400;
+  const unsigned int n_time_steps = 50;
   const double maturity_time = 1.0;
   double time_step = maturity_time / n_time_steps;
   // unsigned int timestep_number = 0;
@@ -573,7 +573,7 @@ public:
   // void create_problem();
   void do_one_timestep();
   
-  void process_solution(const double curr_time);
+  void process_solution();
   void write_convergence_table();
 
   void output_results(const double curr_time);
@@ -1202,10 +1202,10 @@ void BlackScholesSolver<0>::do_one_timestep()
 /************************ Template 'process_solution' *************************/
 /******************************************************************************/
 template <int dim>
-void BlackScholesSolver<dim>::process_solution(const double curr_time)
+void BlackScholesSolver<dim>::process_solution()
 {
   Solution<dim> sol;
-  sol.set_time(curr_time);
+  sol.set_time(current_time);
   Vector<float> difference_per_cell(triangulation.n_active_cells());
   VectorTools::integrate_difference(dof_handler,
                                   solution,
@@ -1372,30 +1372,34 @@ void BlackScholesSolver<dim>::run()
   //                                           DataOutStack<dim>::dof_vector);
   setup_system();
 
-  // for (uint64_t time_step_number = 0; time_step_number < n_time_steps; time_step_number++)
-  // {
-  //   if (time_step_number % 50 == 0)
-  //   {
-  //     double percentDone = ((double)time_step_number / (double)n_time_steps) * 100;
-  //     std::cout << "TIME STEP NUMBER: " << time_step_number << ". PERCENT DONE: " << percentDone << "%" << std::endl;
-  //   }
+  // First time
+  create_problem(current_time);
+  do_one_timestep();
 
+  for (uint64_t time_step_number = 0; time_step_number < n_time_steps; time_step_number++)
+  {
+    current_time += time_step;
+
+    if (time_step_number % 10 == 0)
+    {
+      double percentDone = ((double)time_step_number / (double)n_time_steps) * 100;
+      std::cout << "TIME STEP NUMBER: " << time_step_number << ". PERCENT DONE: " << percentDone << "%" << std::endl;
+    }
+
+    create_problem(current_time);
+    do_one_timestep();
+
+  }
+
+  // while (current_time <= maturity_time)
+  // {
   //   create_problem(current_time);
   //   do_one_timestep();
 
   //   current_time += time_step;
+
+  //   // output_results(current_time);
   // }
-
-  while (current_time <= maturity_time)
-  {
-    if (current_time)
-    create_problem(current_time);
-    do_one_timestep();
-
-    current_time += time_step;
-
-    // output_results(current_time);
-  }
   // std::cout << sol.value(Point<dim>({0,0})) << " " << sol.value(Point<dim>({0,1})) << " " << sol.value(Point<dim>({1,0}));
   // const std::string filename = "solution.vtk";
   //       std::ofstream output(filename);
@@ -1435,7 +1439,7 @@ int main()
   uint32_t full_bits = (1 << dimension) - 1;
 
   BlackScholesSolver<dimension> bsp(full_bits, dimension);
-  for (unsigned int cycle = 0; cycle < 5; cycle++)
+  for (unsigned int cycle = 0; cycle < 6; cycle++)
   {
     std::cout << "CYCLE: " << cycle << std::endl;
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
@@ -1443,7 +1447,7 @@ int main()
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     std::cout << "Time difference = " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << "[ms]" << std::endl;
 
-    bsp.process_solution(maturity_time);
+    bsp.process_solution();
 
     bsp.refine_grid();
   }
