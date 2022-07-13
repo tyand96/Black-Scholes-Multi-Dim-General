@@ -55,6 +55,7 @@
 #include <fstream>
 // And this for the declarations of the `std::sqrt` and `std::fabs` functions:
 #include <cmath>
+#include <algorithm>
 
 using namespace dealii;
 
@@ -69,12 +70,13 @@ using namespace dealii;
   // double current_time = 0.0; 
   const double maximum_stock_price = 1.0;
   const double strike_price = 0.5;
-  const Tensor<2, 3> rho({ {1,.5,.6}
+  constexpr int tensor_dim = 3;
+  const Tensor<2, tensor_dim> rho({ {1,.5,.6}
                                     ,{.5,1,.7}
                                     ,{.6,.7,1}});
   // const Tensor<2,1> rho({{1}});
   // const Tensor<2,2> rho({ {1, 0.5}, {0.5, 1}});
-  const Tensor<1, 3> sigma( {.2,.2,.3} );
+  const Tensor<1, tensor_dim> sigma( {.2,.2,.3} );
   // const Tensor<1,1> sigma({.2});
   const double interest_rate = .05;
   constexpr unsigned int initial_global_refinement = 0;
@@ -116,6 +118,71 @@ uint32_t boundary_id(const uint64_t missing_axis, const uint64_t finalDim)
   }
 
   return ret;
+}
+
+template <int dim>
+std::array<uint32_t, dim> get_axis_ids(uint32_t boundary_id)
+{
+  std::array<uint32_t, dim> axis_ids;
+  axis_ids.fill(0);
+
+  uint32_t bits_found = 0;
+  uint32_t counter = 0;
+  while ( (bits_found < dim) && (counter < 32) ) // Because 32 bits
+  {
+    if (boundary_id & 1)
+    {
+      axis_ids[bits_found] = counter;
+      bits_found++;
+    }
+    boundary_id >>= 1;
+    counter++;
+  }
+  assert(bits_found == dim);
+
+  return axis_ids;
+}
+
+template <int dim, int TensorDim>
+Tensor<2,dim> create_rho_matrix(uint32_t b_id, const Tensor<2,TensorDim> rho_matrix)
+{
+  auto axis_ids = get_axis_ids<dim>(b_id);
+  Tensor<2,dim> ret_matrix;
+
+  for (uint32_t row = 0; row < TensorDim; row++)
+  {
+    for (uint32_t col = 0; col < TensorDim; col++)
+    {
+      auto rowIdx = std::find(axis_ids.begin(), axis_ids.end(), row) - axis_ids.begin();
+      auto colIdx = std::find(axis_ids.begin(), axis_ids.end(), col) - axis_ids.begin();
+
+      if ( (rowIdx != dim) && (colIdx != dim))
+      {
+        ret_matrix[rowIdx][colIdx] = rho_matrix[row][col];
+      }
+    }
+  }
+
+  return ret_matrix;
+}
+
+template <int dim, int TensorDim>
+Tensor<1,dim> create_sigma_vector(const uint32_t b_id, const Tensor<1,TensorDim> sigma_vector)
+{
+  auto axis_ids = get_axis_ids<dim>(b_id);
+  Tensor<1,dim> ret_vector;
+
+  for (uint32_t sigmaIdx = 0; sigmaIdx < TensorDim; sigmaIdx++)
+  {
+    auto vecIdx = std::find(axis_ids.begin(), axis_ids.end(), sigmaIdx) - axis_ids.begin();
+
+    if (vecIdx != dim)
+    {
+      ret_vector[vecIdx] = sigma_vector[sigmaIdx];
+    }
+  }
+
+  return ret_vector;
 }
 
 // ### MMS Solution ###
@@ -189,19 +256,27 @@ template <int dim>
 class AMatrix: public TensorFunction<2,dim>
 {
 public:
-  AMatrix();
+  AMatrix(const Tensor<1,dim> sigmaTT,
+          const Tensor<2,dim> rhoTT);
 
   virtual Tensor<2,dim>
   value(const Point<dim> &p) const override;
 
   Tensor<1,dim>
   divergence(const Point<dim> &p) const;
+
+private:
+  Tensor<1,dim> _sigma;
+  Tensor<2,dim> _rho;
 };
 
 // Constructor
 template <int dim>
-AMatrix<dim>::AMatrix()
+AMatrix<dim>::AMatrix(const Tensor<1,dim> sigmaTT,
+                      const Tensor<2,dim> rhoTT)
   : TensorFunction<2,dim>()
+  , _sigma(sigmaTT)
+  , _rho(rhoTT)
 {}
 
 template <int dim>
@@ -214,7 +289,7 @@ AMatrix<dim>::value(const Point<dim> &p) const
   {
     for (unsigned int j = 0; j < dim; j++)
     {
-      a_matrix[i][j] = 0.5 * sigma[i]*sigma[j] * rho[i][j] * p(i)*p(j);
+      a_matrix[i][j] = 0.5 * _sigma[i]*_sigma[j] * _rho[i][j] * p(i)*p(j);
     }
   }
 
@@ -231,7 +306,7 @@ AMatrix<dim>::divergence(const Point<dim> &p) const
     {
       for (unsigned int i=0; i<p.dimension; ++i)
       {
-        div_vector[j] += 0.5*sigma[i]*sigma[j]*rho[i][j] * (p[j] + p[i]*(i==j?1:0));  
+        div_vector[j] += 0.5*_sigma[i]*_sigma[j]*_rho[i][j] * (p[j] + p[i]*(i==j?1:0));  
       }
     }
 
@@ -462,7 +537,8 @@ template <int dim>
 class BlackScholesSolver
 {
 public:
-  BlackScholesSolver(const int finalDim = dim);
+  BlackScholesSolver(const uint32_t b_id,
+                    const int finalDim = dim);
 
   void refine_grid();
 
@@ -491,7 +567,7 @@ public:
 
   // void setup_system();
   // void create_problem();
-  void do_one_timestep(const int finalProblemDim);
+  void do_one_timestep();
   
   void process_solution(const double curr_time);
   void write_convergence_table();
@@ -515,10 +591,13 @@ private:
 
   SparsityPattern      sparsity_pattern;
 
-  BlackScholesSolver<dim-1> lowerDimSolver;
+  // BlackScholesSolver<dim-1> lowerDimSolver;
   std::map<uint32_t, std::unique_ptr<BlackScholesSolver<dim-1>>> lower_dim_solvers;
 
   double current_time;
+
+  const Tensor<2,dim> _rho;
+  const Tensor<1,dim> _sigma;
 
   AMatrix<dim> a_matrix;
   QVector<dim> q_vector;
@@ -531,7 +610,6 @@ private:
 
   Vector<double> system_rhs;
 
-  uint64_t num_solutions;
   uint64_t final_dim;
 
   ConvergenceTable convergence_table;
@@ -546,11 +624,12 @@ template<>
 class BlackScholesSolver<0>
 {
 public:
-  BlackScholesSolver(const uint64_t finalDim = 0);
+  BlackScholesSolver(const uint32_t b_id,
+                    const int finalDim = 0);
 
   void setup_system();
   void create_problem(const double curr_time);
-  void do_one_timestep(const int finalProblemDim);
+  void do_one_timestep();
   void refine_grid();
 
 };
@@ -558,24 +637,28 @@ public:
 /********************** Template Solver Constructor ***************************/
 /******************************************************************************/
 template <int dim>
-BlackScholesSolver<dim>::BlackScholesSolver(const int finalDim)
+BlackScholesSolver<dim>::BlackScholesSolver(const uint32_t b_id,
+                                            const int finalDim)
   : dof_handler(triangulation)
   , fe(1)
   , current_time(0)
+  , _rho(create_rho_matrix<dim,tensor_dim>(b_id, rho))
+  , _sigma(create_sigma_vector<dim,tensor_dim>(b_id, sigma))
+  , a_matrix(_sigma, _rho)
   , final_dim(finalDim)
 {
   GridGenerator::hyper_cube(triangulation, 0.0, maximum_stock_price, true);
   triangulation.refine_global(initial_global_refinement);
 
-  num_solutions = choose(finalDim, dim);
 }
 
 
 /************************* 0-D Solver Constructor *****************************/
 /******************************************************************************/
-BlackScholesSolver<0>::BlackScholesSolver(const uint64_t finalDim)
+BlackScholesSolver<0>::BlackScholesSolver(const uint32_t b_id, const int finalDim)
 {
   (void) finalDim;
+  (void) b_id;
 }
 
 /**************************** 0-D 'refine_grid' *******************************/
@@ -787,7 +870,7 @@ void BlackScholesSolver<dim>::create_lower_dim_solver(const uint32_t b_id,
   // If the boundary id doesn't exist, then create it. Otherwise, just pass
   if (ld_solvers.find(b_id) == ld_solvers.end())
   {
-    ld_solvers[b_id] = std::make_unique<BlackScholesSolver<dim-1>>(final_dim);
+    ld_solvers[b_id] = std::make_unique<BlackScholesSolver<dim-1>>(b_id, final_dim);
   }
   else
   {
@@ -830,7 +913,7 @@ void BlackScholesSolver<dim>::setup_system()
     create_lower_dim_solver(b_id, lower_dim_solvers);
     lower_dim_solvers[b_id]->setup_system();
   }
-  lowerDimSolver.setup_system();
+  // lowerDimSolver.setup_system();
   // output_results(0);
 }
 
@@ -960,7 +1043,7 @@ void BlackScholesSolver<dim>::impose_boundary_conditions(const double curr_time)
     VectorTools::interpolate_boundary_values(dof_handler,
                                                 /*Boundary Id=*/b_id,
                                                 ScalarFunctionFromFunctionObject<dim>
-                                                ([b_id, SolutionLD, this, curr_time](const Point<dim> &p)
+                                                ([b_id, SolutionLD, this](const Point<dim> &p)
                                                   {
                                                     const Point<dim-1> p_along_axis = project_point(p, b_id);
                                                     const double boundary_value = SolutionLD.value(p_along_axis);
@@ -1032,7 +1115,7 @@ void BlackScholesSolver<dim>::create_problem(const double curr_time)
     lowerDimSolverTT.second->create_problem(curr_time);
     // Then solve one timestep for each of them, so that they can be used
     // as boundary conditions
-    lowerDimSolverTT.second->do_one_timestep(final_dim);
+    lowerDimSolverTT.second->do_one_timestep();
   }
 
   // for (const auto &lowerDimSolverTT : lower_dim_solvers)
@@ -1096,62 +1179,20 @@ void BlackScholesSolver<dim>::create_problem(const double curr_time)
 /*********************** Template 'do_one_timestep' ***************************/
 /******************************************************************************/
 template <int dim>
-void BlackScholesSolver<dim>::do_one_timestep(const int finalProblemDim)
+void BlackScholesSolver<dim>::do_one_timestep()
 {
-  // std::map<uint64_t, ComputedSolution<dim-1>> lowerDimSol = lowerDimSolver.do_one_timestep(curr_time, dim);
-  // // Get the lower dimensional solutions
-  // for (const auto lowerDimSolTT : lower_dim_solvers)
-  // {
-  //   lowerDimSolTT.second->do_one_timestep();
-  // }
-
-  // uint64_t num_solutions = choose(finalProblemDim, dim);
-
-  // for (uint64_t i = 0; i < num_solutions; i++)
-  // {
-    SolverControl                          solver_control(1000, 1e-12);
-    SolverCG<Vector<double>>               cg(solver_control);
-    PreconditionSSOR<SparseMatrix<double>> preconditioner;
-    preconditioner.initialize(system_matrix, 1.0);
-    cg.solve(system_matrix, solution, system_rhs, preconditioner);
-    constraints.distribute(solution);
-  // }
-
+  SolverControl                          solver_control(1000, 1e-12);
+  SolverCG<Vector<double>>               cg(solver_control);
+  PreconditionSSOR<SparseMatrix<double>> preconditioner;
+  preconditioner.initialize(system_matrix, 1.0);
+  cg.solve(system_matrix, solution, system_rhs, preconditioner);
+  constraints.distribute(solution);
 }
 
 /************************** 0-D 'do_one_timestep' *****************************/
 /******************************************************************************/
-void BlackScholesSolver<0>::do_one_timestep(const int finalProblemDim)
+void BlackScholesSolver<0>::do_one_timestep()
 {
-
-}
-
-/************************** 1-D 'do_one_timestep' *****************************/
-/******************************************************************************/
-template<>
-void BlackScholesSolver<1>::do_one_timestep(const int finalProblemDim)
-{
-  // uint64_t num_solutions = choose(finalProblemDim, 1);
-
-  // for (uint64_t i = 0; i < num_solutions; i++)
-  // {
-    SolverControl                          solver_control(1000, 1e-12);
-    SolverCG<Vector<double>>               cg(solver_control);
-    PreconditionSSOR<SparseMatrix<double>> preconditioner;
-    preconditioner.initialize(system_matrix, 1.0);
-    cg.solve(system_matrix, solution, system_rhs, preconditioner);
-    constraints.distribute(solution);
-  // }
-  // std::cout << "1-D TIMESTEP. CURRENT TIME: " << current_time << std::endl;
-  // solution.print(std::cout);
-
-
-  // std::cout << "1D currTime: " << curr_time << "... ";
-  // for (const auto &p: ret[1])
-  // {
-  //   std::cout << p << " ";
-  // }
-  // std::cout << std::endl;
 
 }
 
@@ -1331,7 +1372,7 @@ void BlackScholesSolver<dim>::run()
   while (current_time <= maturity_time)
   {
     create_problem(current_time);
-    do_one_timestep(dim);
+    do_one_timestep();
 
     current_time += time_step;
 
@@ -1373,22 +1414,10 @@ BlackScholesSolver<dim>::project_point(const Point<dim> &p, const uint32_t b_id)
 
 int main()
 {
-  // Solution<dimension> sol;
-  // // Point<dimension> p = {1,2,3};
-  // Point<dimension> p(5);
-  // std::cout << p(0) << std::endl;
-  // Tensor<1,dimension> test = sol.gradient(p);
+  uint32_t full_bits = (1 << (dimension + 1)) - 1;
 
-  // std::cout << test[0] << std::endl;
-
-
-  // AMatrix<dimension> amatrixFunc;
-  
-  // Tensor<2,dimension> amatrix = amatrixFunc.value(p);
-  // std::cout << amatrix[0][0] << std::endl;
-
-  BlackScholesSolver<dimension> bsp;
-  for (unsigned int cycle = 0; cycle < 8; cycle++)
+  BlackScholesSolver<dimension> bsp(full_bits, dimension);
+  for (unsigned int cycle = 0; cycle < 6; cycle++)
   {
     bsp.run();
 
@@ -1397,26 +1426,4 @@ int main()
     bsp.refine_grid();
   }
   bsp.write_convergence_table();
-
-
-  // bsp.run();
-  // bsp.process_solution(maturity_time);
-  // bsp.write_convergence_table();
-
-  // RightBoundary<1> rt;
-  // rt.set_time(1);
-  // std::cout << "RIGHT: " << rt.value(Point<1>(3)) << std::endl;
-
-  // Solution<1> sol;
-  // sol.set_time(maturity_time);
-  
-
-
-  // auto r = bsp.do_one_timestep(0,dimension);
-  // std::cout << r[1][0] << std::endl;
-  // bsp.apply_boundary_ids();
-
-  // // BlackScholesSolver<2> testSolver;
-  // // testSolver.apply_boundary_ids();
-  // bsp.run();
 }
