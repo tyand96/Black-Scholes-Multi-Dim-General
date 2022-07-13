@@ -76,7 +76,7 @@ using namespace dealii;
                                     ,{.6,.7,1}});
   // const Tensor<2,1> rho({{1}});
   // const Tensor<2,2> rho({ {1, 0.5}, {0.5, 1}});
-  const Tensor<1, tensor_dim> sigma( {.2,.2,.3} );
+  const Tensor<1, tensor_dim> sigma( {.2,.7,.3} );
   // const Tensor<1,1> sigma({.2});
   const double interest_rate = .05;
   constexpr unsigned int initial_global_refinement = 0;
@@ -489,17 +489,20 @@ template <int dim>
 class RightHandSide: public Function<dim>
 {
 public:
-  RightHandSide();
+  RightHandSide(const Tensor<1,dim> sigma_vector);
 
   virtual double value(const Point<dim> &p,
                       const unsigned int component = 0) const;
 
+private:
+  Tensor<1,dim> _sigma;
 };
 
 /***************************** RHS Constructor ********************************/
 /******************************************************************************/
 template <int dim>
-RightHandSide<dim>::RightHandSide()
+RightHandSide<dim>::RightHandSide(const Tensor<1,dim> sigma_vector)
+: _sigma(sigma_vector)
 {}
 
 /******************************* RHS 'value' **********************************/
@@ -513,7 +516,7 @@ double RightHandSide<dim>::value(const Point<dim> &p,
   (void) component;
   for (unsigned int d=0; d<dim; d++)
   {
-    ret += -Utilities::fixed_power<2,double>(p(d) * sigma[d]);
+    ret += -Utilities::fixed_power<2,double>(p(d) * _sigma[d]);
     ret += -Utilities::fixed_power<2,double>(p(d)) * interest_rate;
   }
   ret += this->get_time() * (2 + this->get_time() * interest_rate);
@@ -649,7 +652,6 @@ BlackScholesSolver<dim>::BlackScholesSolver(const uint32_t b_id,
 {
   GridGenerator::hyper_cube(triangulation, 0.0, maximum_stock_price, true);
   triangulation.refine_global(initial_global_refinement);
-
 }
 
 
@@ -968,7 +970,7 @@ Vector<double> BlackScholesSolver<dim>::create_forcing_terms(const double curr_t
   ret_forcing_terms.reinit(dof_handler.n_dofs());
 
   // Compute the forcing terms
-  RightHandSide<dim> rhs_function;
+  RightHandSide<dim> rhs_function(_sigma);
   rhs_function.set_time(curr_time);
 
   VectorTools::create_right_hand_side(dof_handler,
@@ -1414,7 +1416,7 @@ BlackScholesSolver<dim>::project_point(const Point<dim> &p, const uint32_t b_id)
 
 int main()
 {
-  uint32_t full_bits = (1 << (dimension + 1)) - 1;
+  uint32_t full_bits = (1 << dimension) - 1;
 
   BlackScholesSolver<dimension> bsp(full_bits, dimension);
   for (unsigned int cycle = 0; cycle < 6; cycle++)
