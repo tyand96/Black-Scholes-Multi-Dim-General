@@ -56,13 +56,14 @@
 // And this for the declarations of the `std::sqrt` and `std::fabs` functions:
 #include <cmath>
 #include <algorithm>
+#include <chrono>
 
 using namespace dealii;
 
 
 
 // ############### Begin setting parameters ###################
-  constexpr unsigned int dimension = 2;
+  constexpr unsigned int dimension = 3;
   const unsigned int n_time_steps = 400;
   const double maturity_time = 1.0;
   double time_step = maturity_time / n_time_steps;
@@ -617,8 +618,8 @@ private:
 
   ConvergenceTable convergence_table;
 
-  DataOutStack<dim> data_out_stack;
-  std::vector<std::string> solution_names;
+  // DataOutStack<dim> data_out_stack;
+  // std::vector<std::string> solution_names;
 };
 
 /************************* 0-D Solver Definition ******************************/
@@ -1346,15 +1347,15 @@ void BlackScholesSolver<dim>::write_convergence_table()
 
 /*********************** Template 'output_results' ****************************/
 /******************************************************************************/
-template<>
-void BlackScholesSolver<1>::output_results(const double curr_time)
-{
-  data_out_stack.new_parameter_value(curr_time, time_step);
-  data_out_stack.attach_dof_handler (dof_handler);
-  data_out_stack.add_data_vector (solution, solution_names);
-  data_out_stack.build_patches (2);
-  data_out_stack.finish_parameter_value ();
-}
+// template<>
+// void BlackScholesSolver<1>::output_results(const double curr_time)
+// {
+//   data_out_stack.new_parameter_value(curr_time, time_step);
+//   data_out_stack.attach_dof_handler (dof_handler);
+//   data_out_stack.add_data_vector (solution, solution_names);
+//   data_out_stack.build_patches (2);
+//   data_out_stack.finish_parameter_value ();
+// }
 
 
 /***************************** Template 'run' *********************************/
@@ -1371,8 +1372,23 @@ void BlackScholesSolver<dim>::run()
   //                                           DataOutStack<dim>::dof_vector);
   setup_system();
 
+  // for (uint64_t time_step_number = 0; time_step_number < n_time_steps; time_step_number++)
+  // {
+  //   if (time_step_number % 50 == 0)
+  //   {
+  //     double percentDone = ((double)time_step_number / (double)n_time_steps) * 100;
+  //     std::cout << "TIME STEP NUMBER: " << time_step_number << ". PERCENT DONE: " << percentDone << "%" << std::endl;
+  //   }
+
+  //   create_problem(current_time);
+  //   do_one_timestep();
+
+  //   current_time += time_step;
+  // }
+
   while (current_time <= maturity_time)
   {
+    if (current_time)
     create_problem(current_time);
     do_one_timestep();
 
@@ -1419,9 +1435,13 @@ int main()
   uint32_t full_bits = (1 << dimension) - 1;
 
   BlackScholesSolver<dimension> bsp(full_bits, dimension);
-  for (unsigned int cycle = 0; cycle < 6; cycle++)
+  for (unsigned int cycle = 0; cycle < 5; cycle++)
   {
+    std::cout << "CYCLE: " << cycle << std::endl;
+    std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     bsp.run();
+    std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+    std::cout << "Time difference = " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << "[ms]" << std::endl;
 
     bsp.process_solution(maturity_time);
 
