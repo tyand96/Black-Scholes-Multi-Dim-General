@@ -75,7 +75,7 @@ using namespace dealii;
                                     ,{.6,.7,1}});
   const Tensor<1, tensor_dim> sigma( {.2,.7,.3} );
   const double interest_rate = .05;
-  #define MMS
+  // #define MMS
   // #define RAND
 
   #ifndef MMS
