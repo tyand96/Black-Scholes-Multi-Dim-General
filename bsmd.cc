@@ -57,6 +57,7 @@
 #include <cmath>
 #include <algorithm>
 #include <chrono>
+#include <random>
 
 using namespace dealii;
 
@@ -67,21 +68,28 @@ using namespace dealii;
   const unsigned int n_time_steps = 50;
   const double maturity_time = 1.0;
   double time_step = maturity_time / n_time_steps;
-  // unsigned int timestep_number = 0;
-  // double current_time = 0.0; 
-  const double maximum_stock_price = 1.0;
-  const double strike_price = 0.5;
+  const double maximum_stock_price = 5.0;
   constexpr int tensor_dim = 3;
   const Tensor<2, tensor_dim> rho({ {1,.5,.6}
                                     ,{.5,1,.7}
                                     ,{.6,.7,1}});
-  // const Tensor<2,1> rho({{1}});
-  // const Tensor<2,2> rho({ {1, 0.5}, {0.5, 1}});
   const Tensor<1, tensor_dim> sigma( {.2,.7,.3} );
-  // const Tensor<1,1> sigma({.2});
   const double interest_rate = .05;
-  constexpr unsigned int initial_global_refinement = 0;
   #define MMS
+  // #define RAND
+
+  #ifndef MMS
+    const double strike_price = 3;
+    constexpr unsigned int initial_global_refinement = 5;
+  #else
+    constexpr unsigned int initial_global_refinement = 0;
+  #endif
+
+  #ifdef RAND
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<> dis(-10,10);
+  #endif
 // ############### End setting parameters ###################
 
 template <int dim>
@@ -187,7 +195,7 @@ Tensor<1,dim> create_sigma_vector(const uint32_t b_id, const Tensor<1,TensorDim>
 }
 
 // ### MMS Solution ###
-#ifdef MMS
+// #ifdef MMS
 template <int dim>
 class Solution: public Function<dim>
 {
@@ -212,10 +220,6 @@ double Solution<dim>::value(const Point<dim> &p,
                       const unsigned int component) const
 {
   (void) component;
-  // std::cout << "SOLUTION VALUE." << std::endl;
-  // std::cout << "INPUT POINT: ";
-  // printPoint<dim>(p);
-  // std::cout << "INPUT TIME: " << this->get_time() << std::endl;
 
   double ret = -Utilities::fixed_power<2,double>(this->get_time()) + 6;
   for (unsigned int i = 0; i < dim; i++)
@@ -241,14 +245,8 @@ Tensor<1,dim> Solution<dim>::gradient(const Point<dim> &p,
   return ret;
 }
 
-#endif
+// #endif
 // ## End of MMS Solution ##
-
-
-
-
-
-
 
 
 
@@ -385,8 +383,17 @@ double InitialConditions<dim>::value(const Point<dim> &p,
   }
   retVal += 6;
 #else
-  Assert(false, ExcNotImplemented());
-  retVal = 0.0;
+  (void) component;
+  for (int i = 0; i < dim; i++)
+  {
+    retVal += p(i);
+  }
+  
+  retVal = std::max(retVal - strike_price, 0.0);
+#endif
+
+#ifdef RAND
+  retVal += dis(gen);
 #endif
   return retVal;
 }
@@ -432,7 +439,7 @@ double LeftBoundary1D::value(const Point<1> &p,
 #ifdef MMS
   ret += -Utilities::fixed_power<2, double>(this->get_time()) + 6;
 #else
-  Assert(false, ExcNotImplemented());
+  ret = 0.0;
 #endif
 
   return ret;
@@ -472,12 +479,11 @@ double RightBoundary<dim>::value(const Point<dim> &p,
   }
   ret += -Utilities::fixed_power<2,double>(this->get_time()) + 6;
 #else
-  Assert(false, ExcNotImplemented());
-  // for (unsigned int d=0; d<dim; ++d)
-  // {
-  //   ret += p(d);
-  // }
-  // ret -= strike_price * exp((-interest_rate) * (this->get_time()));
+  for (unsigned int d=0; d<dim; ++d)
+  {
+    ret += p(d);
+  }
+  ret -= strike_price * exp((-interest_rate) * (this->get_time()));
 #endif
 
   return ret;
@@ -523,7 +529,9 @@ double RightHandSide<dim>::value(const Point<dim> &p,
   ret += this->get_time() * (2 + this->get_time() * interest_rate);
   ret -= 6 * interest_rate;
 #else
-  Assert(false, ExcNotImplemented());
+  (void) p;
+  (void) component;
+  ret = 0.0;
 #endif
 
   return ret;
@@ -576,9 +584,9 @@ public:
   void process_solution();
   void write_convergence_table();
 
-  void output_results(const double curr_time);
+  void output_results(const double curr_time, const uint64_t time_step_number);
 
-  void run();
+  void run(const bool isLast = false);
   
   Vector<double> solution;
 private:
@@ -595,7 +603,6 @@ private:
 
   SparsityPattern      sparsity_pattern;
 
-  // BlackScholesSolver<dim-1> lowerDimSolver;
   std::map<uint32_t, std::unique_ptr<BlackScholesSolver<dim-1>>> lower_dim_solvers;
 
   double current_time;
@@ -617,9 +624,6 @@ private:
   uint64_t final_dim;
 
   ConvergenceTable convergence_table;
-
-  // DataOutStack<dim> data_out_stack;
-  // std::vector<std::string> solution_names;
 };
 
 /************************* 0-D Solver Definition ******************************/
@@ -848,9 +852,6 @@ void BlackScholesSolver<dim>::apply_boundary_ids()
           // A value of zero indicates that the face is on the corner
           if ((std::fabs(center(i) - (0.0)) < 1e-12))
           {
-            // std::cout << "MISSING AXIS: " << i << std::endl;
-            // std::cout << "CENTER: " << center(i) << std::endl;
-            // std::cout << "BOUNDARY ID: " << boundary_id(i, final_dim) << std::endl;
             face->set_boundary_id(boundary_id(i, dim));
             
             // Only one element of 'center' can be zero.
@@ -858,8 +859,6 @@ void BlackScholesSolver<dim>::apply_boundary_ids()
           }
         }
       }
-      // std::cout << "DIM: " << dim << ". ";
-      // std::cout << (int64_t)face->boundary_id() << ": " << face->at_boundary() << std::endl;
     }
   }
 }
@@ -916,8 +915,6 @@ void BlackScholesSolver<dim>::setup_system()
     create_lower_dim_solver(b_id, lower_dim_solvers);
     lower_dim_solvers[b_id]->setup_system();
   }
-  // lowerDimSolver.setup_system();
-  // output_results(0);
 }
 
 /******************** Template 'create_rhs_linear_system' *********************/
@@ -1038,10 +1035,6 @@ void BlackScholesSolver<dim>::impose_boundary_conditions(const double curr_time)
     Functions::FEFieldFunction<dim-1> SolutionLD(lowerDimSolverTT.second->dof_handler,
                                                   lowerDimSolverTT.second->solution);
     
-    // std::cout << "1-D SOLUTION: ";
-    // lowerDimSolverTT.second->solution.print(std::cout);
-    // std::cout << SolutionLD.value(Point<1>(0)) << std::endl;
-    // abort();
     // Next, I need to apply this function to the corresponding boundary
     VectorTools::interpolate_boundary_values(dof_handler,
                                                 /*Boundary Id=*/b_id,
@@ -1050,14 +1043,6 @@ void BlackScholesSolver<dim>::impose_boundary_conditions(const double curr_time)
                                                   {
                                                     const Point<dim-1> p_along_axis = project_point(p, b_id);
                                                     const double boundary_value = SolutionLD.value(p_along_axis);
-
-                                                    // std::cout << "CURRENT TIME: " << curr_time << " BOUNDARY ID: " << b_id << std::endl;
-                                                    // std::cout << "BEFORE PROJECTION: ";
-                                                    // printPoint<dim>(p);
-                                                    // std::cout << "AFTER PROJECTION: ";
-                                                    // printPoint<dim-1>(p_along_axis);
-                                                    // std::cout << "BOUNDARY VALUE: " << boundary_value << std::endl;
-                                                    // std::cout << std::endl;
                                                     
                                                     return boundary_value;
                                                   }
@@ -1121,14 +1106,6 @@ void BlackScholesSolver<dim>::create_problem(const double curr_time)
     lowerDimSolverTT.second->do_one_timestep();
   }
 
-  // for (const auto &lowerDimSolverTT : lower_dim_solvers)
-  // {
-  //   std::cout << "CURR TIME: " << curr_time << std::endl;
-  //   std::cout << "BOUNDARY " << lowerDimSolverTT.first << ": ";
-  //   lowerDimSolverTT.second->solution.print(std::cout);
-  // }
-  // abort();
-
   // Set up vectors to hold temporary data
   Vector<double> forcing_terms;
 
@@ -1146,38 +1123,6 @@ void BlackScholesSolver<dim>::create_problem(const double curr_time)
 
   impose_boundary_conditions(curr_time);
 }
-// template <>
-// void BlackScholesSolver<1>::create_problem(const double curr_time)
-// {
-//   // Create the problem for all of the lower dimensional solutions
-//   for (const auto &lowerDimSolverTT : lower_dim_solvers)
-//   {
-//     lowerDimSolverTT.second->create_problem(curr_time);
-//     // Then solve one timestep for each of them, so that they can be used
-//     // as boundary conditions
-//     lowerDimSolverTT.second->do_one_timestep(final_dim);
-//   }
-
-//   // std::cout << "LOWER DIM SOLUTION 1: ";
-//   // lower_dim_solvers[1]->solution.print(std::cout);
-
-//   // Set up vectors to hold temporary data
-//   Vector<double> forcing_terms;
-
-//   // Initialize these vectors
-//   forcing_terms.reinit(dof_handler.n_dofs());
-//   system_rhs.reinit(dof_handler.n_dofs());
-
-//   system_rhs = create_rhs_linear_system();
-//   system_rhs += create_forcing_terms(curr_time);
-
-//   // Next, create the system matrix that needs to be inverted at every timestep
-//   system_matrix = create_system_matrix();
-
-//   constraints.condense(system_matrix, system_rhs);
-
-//   impose_boundary_conditions(curr_time);
-// }
 
 /*********************** Template 'do_one_timestep' ***************************/
 /******************************************************************************/
@@ -1204,85 +1149,53 @@ void BlackScholesSolver<0>::do_one_timestep()
 template <int dim>
 void BlackScholesSolver<dim>::process_solution()
 {
-  Solution<dim> sol;
-  sol.set_time(current_time);
-  Vector<float> difference_per_cell(triangulation.n_active_cells());
-  VectorTools::integrate_difference(dof_handler,
-                                  solution,
-                                  sol,
-                                  difference_per_cell,
-                                  QGauss<dim>(fe.degree + 1),
-                                  VectorTools::L2_norm);
-  const double L2_error =
-  VectorTools::compute_global_error(triangulation,
-                                      difference_per_cell,
-                                      VectorTools::L2_norm);
-  VectorTools::integrate_difference(dof_handler,
-                                  solution,
-                                  sol,
-                                  difference_per_cell,
-                                  QGauss<dim>(fe.degree + 1),
-                                  VectorTools::H1_seminorm);
-  const double H1_error =
-  VectorTools::compute_global_error(triangulation,
-                                      difference_per_cell,
-                                      VectorTools::H1_seminorm);
-  const QTrapez<1>     q_trapez;
-  const QIterated<dim> q_iterated(q_trapez, fe.degree * 2 + 1);
-  VectorTools::integrate_difference(dof_handler,
-                                  solution,
-                                  sol,
-                                  difference_per_cell,
-                                  q_iterated,
-                                  VectorTools::Linfty_norm);
-  const double Linfty_error =
-  VectorTools::compute_global_error(triangulation,
-                                      difference_per_cell,
-                                      VectorTools::Linfty_norm);
-  // Solution<dim> sol;
-  // sol.set_time(curr_time);
-  // std::cout << "COMPUTED: ";solution.print(std::cout);
-  // std::cout << "THEORY: " << sol.value(Point<1>(0)) << " " << sol.value(Point<1>(1)) << std::endl;
-  // Vector<float> difference_per_cell(triangulation.n_active_cells());
-  // VectorTools::integrate_difference(dof_handler,
-  //                                   solution,
-  //                                   sol,
-  //                                   difference_per_cell,
-  //                                   QGauss<dim>(fe.degree + 1),
-  //                                   VectorTools::L2_norm);
-  // const double L2_error =
-  //   VectorTools::compute_global_error(triangulation,
-  //                                     difference_per_cell,
-  //                                     VectorTools::L2_norm);
-  // VectorTools::integrate_difference(dof_handler,
-  //                                   solution,
-  //                                   sol,
-  //                                   difference_per_cell,
-  //                                   QGauss<dim>(fe.degree + 1),
-  //                                   VectorTools::H1_seminorm);
-  // const double H1_error =
-  //   VectorTools::compute_global_error(triangulation,
-  //                                     difference_per_cell,
-  //                                     VectorTools::H1_seminorm);
-  // const QTrapez<1>  q_trapezoid;
-  // const QIterated<dim> q_iterated(q_trapezoid, fe.degree * 2 + 1);
-  // VectorTools::integrate_difference(dof_handler,
-  //                                   solution,
-  //                                   sol,
-  //                                   difference_per_cell,
-  //                                   q_iterated,
-  //                                   VectorTools::Linfty_norm);
-  // const double Linfty_error =
-  //   VectorTools::compute_global_error(triangulation,
-  //                                     difference_per_cell,
-  //                                     VectorTools::Linfty_norm);
-  const unsigned int n_active_cells = triangulation.n_active_cells();
-  const unsigned int n_dofs         = dof_handler.n_dofs();
-  convergence_table.add_value("cells", n_active_cells);
-  convergence_table.add_value("dofs", n_dofs);
-  convergence_table.add_value("L2", L2_error);
-  convergence_table.add_value("H1", H1_error);
-  convergence_table.add_value("Linfty", Linfty_error);
+  #ifdef MMS
+    Solution<dim> sol;
+    sol.set_time(current_time);
+    Vector<float> difference_per_cell(triangulation.n_active_cells());
+    VectorTools::integrate_difference(dof_handler,
+                                    solution,
+                                    sol,
+                                    difference_per_cell,
+                                    QGauss<dim>(fe.degree + 1),
+                                    VectorTools::L2_norm);
+    const double L2_error =
+    VectorTools::compute_global_error(triangulation,
+                                        difference_per_cell,
+                                        VectorTools::L2_norm);
+    VectorTools::integrate_difference(dof_handler,
+                                    solution,
+                                    sol,
+                                    difference_per_cell,
+                                    QGauss<dim>(fe.degree + 1),
+                                    VectorTools::H1_seminorm);
+    const double H1_error =
+    VectorTools::compute_global_error(triangulation,
+                                        difference_per_cell,
+                                        VectorTools::H1_seminorm);
+    const QTrapez<1>     q_trapez;
+    const QIterated<dim> q_iterated(q_trapez, fe.degree * 2 + 1);
+    VectorTools::integrate_difference(dof_handler,
+                                    solution,
+                                    sol,
+                                    difference_per_cell,
+                                    q_iterated,
+                                    VectorTools::Linfty_norm);
+    const double Linfty_error =
+    VectorTools::compute_global_error(triangulation,
+                                        difference_per_cell,
+                                        VectorTools::Linfty_norm);
+
+    const unsigned int n_active_cells = triangulation.n_active_cells();
+    const unsigned int n_dofs         = dof_handler.n_dofs();
+    convergence_table.add_value("cells", n_active_cells);
+    convergence_table.add_value("dofs", n_dofs);
+    convergence_table.add_value("L2", L2_error);
+    convergence_table.add_value("H1", H1_error);
+    convergence_table.add_value("Linfty", Linfty_error);
+  #else
+    return;
+  #endif
 }
 
 /********************* Template 'write_convergence_table' *********************/
@@ -1290,91 +1203,99 @@ void BlackScholesSolver<dim>::process_solution()
 template <int dim>
 void BlackScholesSolver<dim>::write_convergence_table()
 {
-  convergence_table.set_precision("L2", 3);
-  convergence_table.set_precision("H1", 3);
-  convergence_table.set_precision("Linfty", 3);
-  convergence_table.set_scientific("L2", true);
-  convergence_table.set_scientific("H1", true);
-  convergence_table.set_scientific("Linfty", true);
-  convergence_table.set_tex_caption("cells", "\\# cells");
-  convergence_table.set_tex_caption("dofs", "\\# dofs");
-  convergence_table.set_tex_caption("L2", "@f@f$L^2@f@f$-error");
-  convergence_table.set_tex_caption("H1", "@f@f$H^1@f@f$-error");
-  convergence_table.set_tex_caption("Linfty", "@f@f$L^\\infty@f@f$-error");
-  convergence_table.set_tex_format("cells", "r");
-  convergence_table.set_tex_format("dofs", "r");
-  std::cout << std::endl;
-  convergence_table.write_text(std::cout);
-  std::string error_filename = "error";
-  error_filename += "-global";
-  error_filename += ".tex";
-  std::ofstream error_table_file(error_filename);
-  convergence_table.write_tex(error_table_file);
+  #ifdef MMS
+    convergence_table.set_precision("L2", 3);
+    convergence_table.set_precision("H1", 3);
+    convergence_table.set_precision("Linfty", 3);
+    convergence_table.set_scientific("L2", true);
+    convergence_table.set_scientific("H1", true);
+    convergence_table.set_scientific("Linfty", true);
+    convergence_table.set_tex_caption("cells", "\\# cells");
+    convergence_table.set_tex_caption("dofs", "\\# dofs");
+    convergence_table.set_tex_caption("L2", "@f@f$L^2@f@f$-error");
+    convergence_table.set_tex_caption("H1", "@f@f$H^1@f@f$-error");
+    convergence_table.set_tex_caption("Linfty", "@f@f$L^\\infty@f@f$-error");
+    convergence_table.set_tex_format("cells", "r");
+    convergence_table.set_tex_format("dofs", "r");
+    std::cout << std::endl;
+    convergence_table.write_text(std::cout);
+    std::string error_filename = "error";
+    error_filename += "-global";
+    error_filename += ".tex";
+    std::ofstream error_table_file(error_filename);
+    convergence_table.write_tex(error_table_file);
 
-  convergence_table.add_column_to_supercolumn("cells", "n cells");
-  std::vector<std::string> new_order;
-  new_order.emplace_back("n cells");
-  new_order.emplace_back("H1");
-  new_order.emplace_back("L2");
-  convergence_table.set_column_order(new_order);
-  convergence_table.evaluate_convergence_rates(
-    "L2", ConvergenceTable::reduction_rate);
-  convergence_table.evaluate_convergence_rates(
-    "L2", ConvergenceTable::reduction_rate_log2);
-  convergence_table.evaluate_convergence_rates(
-    "H1", ConvergenceTable::reduction_rate);
-  convergence_table.evaluate_convergence_rates(
-    "H1", ConvergenceTable::reduction_rate_log2);
-  std::cout << std::endl;
-  convergence_table.write_text(std::cout);
-  std::string conv_filename = "convergence";
-  conv_filename += "-global";
-  switch (fe.degree)
-    {
-      case 1:
-        conv_filename += "-q1";
-        break;
-      case 2:
-        conv_filename += "-q2";
-        break;
-      default:
-        Assert(false, ExcNotImplemented());
-    }
-  conv_filename += ".tex";
-  std::ofstream table_file(conv_filename);
-  convergence_table.write_tex(table_file);
+    convergence_table.add_column_to_supercolumn("cells", "n cells");
+    std::vector<std::string> new_order;
+    new_order.emplace_back("n cells");
+    new_order.emplace_back("H1");
+    new_order.emplace_back("L2");
+    convergence_table.set_column_order(new_order);
+    convergence_table.evaluate_convergence_rates(
+      "L2", ConvergenceTable::reduction_rate);
+    convergence_table.evaluate_convergence_rates(
+      "L2", ConvergenceTable::reduction_rate_log2);
+    convergence_table.evaluate_convergence_rates(
+      "H1", ConvergenceTable::reduction_rate);
+    convergence_table.evaluate_convergence_rates(
+      "H1", ConvergenceTable::reduction_rate_log2);
+    std::cout << std::endl;
+    convergence_table.write_text(std::cout);
+    std::string conv_filename = "convergence";
+    conv_filename += "-global";
+    switch (fe.degree)
+      {
+        case 1:
+          conv_filename += "-q1";
+          break;
+        case 2:
+          conv_filename += "-q2";
+          break;
+        default:
+          Assert(false, ExcNotImplemented());
+      }
+    conv_filename += ".tex";
+    std::ofstream table_file(conv_filename);
+    convergence_table.write_tex(table_file);
+  #else
+    return;
+  #endif
 }
 
 /*********************** Template 'output_results' ****************************/
 /******************************************************************************/
-// template<>
-// void BlackScholesSolver<1>::output_results(const double curr_time)
-// {
-//   data_out_stack.new_parameter_value(curr_time, time_step);
-//   data_out_stack.attach_dof_handler (dof_handler);
-//   data_out_stack.add_data_vector (solution, solution_names);
-//   data_out_stack.build_patches (2);
-//   data_out_stack.finish_parameter_value ();
-// }
+template<int dim>
+void BlackScholesSolver<dim>::output_results(const double curr_time,
+                                            const uint64_t time_step_number)
+{
+  DataOut<dim> data_out;
+  data_out.attach_dof_handler(dof_handler);
+  data_out.add_data_vector(solution, "U");
+  data_out.build_patches();
+  data_out.set_flags(DataOutBase::VtkFlags(curr_time, time_step_number));
+  const std::string filename =
+    "solution-" + std::to_string(time_step_number) + ".vtu";
+  std::ofstream output(filename);
+  data_out.write_vtu(output);
+}
 
 
 /***************************** Template 'run' *********************************/
 /******************************************************************************/
 template <int dim>
-void BlackScholesSolver<dim>::run()
+void BlackScholesSolver<dim>::run(const bool isLast)
 {
   current_time = 0.0;
-  // /*
-  //       This sets up the output data.
-  //       */
-  //       solution_names.emplace_back("u");
-  //       data_out_stack.declare_data_vector(solution_names,
-  //                                           DataOutStack<dim>::dof_vector);
   setup_system();
 
   // First time
   create_problem(current_time);
   do_one_timestep();
+  
+  if (isLast)
+  {
+    output_results(current_time, 0);
+  }
 
   for (uint64_t time_step_number = 0; time_step_number < n_time_steps; time_step_number++)
   {
@@ -1389,21 +1310,12 @@ void BlackScholesSolver<dim>::run()
     create_problem(current_time);
     do_one_timestep();
 
+    if (isLast)
+    {
+      output_results(current_time, time_step_number + 1);
+    }
+
   }
-
-  // while (current_time <= maturity_time)
-  // {
-  //   create_problem(current_time);
-  //   do_one_timestep();
-
-  //   current_time += time_step;
-
-  //   // output_results(current_time);
-  // }
-  // std::cout << sol.value(Point<dim>({0,0})) << " " << sol.value(Point<dim>({0,1})) << " " << sol.value(Point<dim>({1,0}));
-  // const std::string filename = "solution.vtk";
-  //       std::ofstream output(filename);
-  //       data_out_stack.write_vtk(output);
 }
 
 /************************ Template 'project_point' ****************************/
@@ -1439,11 +1351,17 @@ int main()
   uint32_t full_bits = (1 << dimension) - 1;
 
   BlackScholesSolver<dimension> bsp(full_bits, dimension);
-  for (unsigned int cycle = 0; cycle < 6; cycle++)
+
+  #ifdef MMS
+  unsigned int num_cycles = 6;
+
+  // bsp.run();
+  // bsp.output_results(maturity_time);
+  for (unsigned int cycle = 0; cycle < num_cycles; cycle++)
   {
     std::cout << "CYCLE: " << cycle << std::endl;
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-    bsp.run();
+    bsp.run(cycle == num_cycles-1);
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     std::cout << "Time difference = " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << "[ms]" << std::endl;
 
@@ -1452,4 +1370,9 @@ int main()
     bsp.refine_grid();
   }
   bsp.write_convergence_table();
+  #endif
+
+  #ifndef MMS
+    bsp.run(true);
+  #endif
 }
