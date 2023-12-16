@@ -55,8 +55,9 @@
 #include <fstream>
 // And this for the declarations of the `std::sqrt` and `std::fabs` functions:
 #include <cmath>
-#include <algorithm>
+// For runtime calculations.
 #include <chrono>
+// For the random number generation.
 #include <random>
 
 using namespace dealii;
@@ -64,7 +65,7 @@ using namespace dealii;
 
 
 // ############### Begin setting parameters ###################
-  constexpr unsigned int dimension = 3;
+  constexpr unsigned int dimension = 2;
   const unsigned int n_time_steps = 50;
   const double maturity_time = 1.0;
   double time_step = maturity_time / n_time_steps;
@@ -75,7 +76,11 @@ using namespace dealii;
                                     ,{.6,.7,1}});
   const Tensor<1, tensor_dim> sigma( {.2,.7,.3} );
   const double interest_rate = .05;
+
+  // Uncomment this to enable the Method of Manufactured Solutions (MMS).
   // #define MMS
+
+  // Uncomment this to allow for random noise to be added.
   // #define RAND
 
   #ifndef MMS
@@ -499,7 +504,7 @@ public:
   RightHandSide(const Tensor<1,dim> sigma_vector);
 
   virtual double value(const Point<dim> &p,
-                      const unsigned int component = 0) const;
+                      const unsigned int component = 0) const override;
 
 private:
   Tensor<1,dim> _sigma;
@@ -1173,7 +1178,7 @@ void BlackScholesSolver<dim>::process_solution()
     VectorTools::compute_global_error(triangulation,
                                         difference_per_cell,
                                         VectorTools::H1_seminorm);
-    const QTrapez<1>     q_trapez;
+    const QTrapezoid<1>     q_trapez;
     const QIterated<dim> q_iterated(q_trapez, fe.degree * 2 + 1);
     VectorTools::integrate_difference(dof_handler,
                                     solution,
