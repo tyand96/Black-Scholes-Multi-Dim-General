@@ -78,7 +78,7 @@ using namespace dealii;
   const double interest_rate = .05;
 
   // Uncomment this to enable the Method of Manufactured Solutions (MMS).
-  #define MMS
+  // #define MMS
 
   // Uncomment this to allow for random noise to be added.
   // #define RAND
@@ -224,6 +224,13 @@ Tensor<1,dim> create_sigma_vector(const uint32_t b_id, const Tensor<1,TensorDim>
 
 // ### MMS Solution ###
 #ifdef MMS
+
+/**
+ * Solution Class
+ * 
+ * This class is used for validating the program when using MMS. The function being chosen here
+ * is the inverted parabola moved up 6 units.
+*/
 template <int dim>
 class Solution: public Function<dim>
 {
@@ -238,11 +245,21 @@ public:
           const unsigned int component = 0) const override;
 };
 
-// Constructor
+// Default Constructor
 template <int dim>
 Solution<dim>::Solution()
 {}
 
+/**
+ * Returns the value of the solution evaluated at a given point.
+ * 
+ * Here, component is unused, but is necessary as an argument because of the inheritance.
+ * 
+ * @param p The point to evaluate at.
+ * @param component An unused parameter.
+ * 
+ * @returns The value of the solution at the given point.
+*/
 template <int dim>
 double Solution<dim>::value(const Point<dim> &p,
                       const unsigned int component) const
