@@ -275,6 +275,16 @@ double Solution<dim>::value(const Point<dim> &p,
   return ret;
 }
 
+/**
+ * Evaluates the gradient of the solution at a given point.
+ * 
+ * Here, the component is unused, but is necessary as an argument because of the inheritance.
+ * 
+ * @param p The point to evaluate the gradient at.
+ * @param component An unused parameter.
+ * 
+ * @returns The value of the gradient at the given point.
+*/
 template <int dim>
 Tensor<1,dim> Solution<dim>::gradient(const Point<dim> &p,
                                 const unsigned int component) const
