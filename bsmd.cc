@@ -78,7 +78,7 @@ using namespace dealii;
   const double interest_rate = .05;
 
   // Uncomment this to enable the Method of Manufactured Solutions (MMS).
-  // #define MMS
+  #define MMS
 
   // Uncomment this to allow for random noise to be added.
   // #define RAND
@@ -97,6 +97,13 @@ using namespace dealii;
   #endif
 // ############### End setting parameters ###################
 
+/**
+ * Prints a point on the screen.
+ * 
+ * This is a helper function that will print the contents of a point to the console.
+ * 
+ * @param p The point to be printed to the console.
+*/
 template <int dim>
 void printPoint(const Point<dim> &p)
 {
@@ -113,6 +120,17 @@ void printPoint(const Point<dim> &p)
 }
 
 // ## Helper Methods ##
+
+/**
+ * Implements the choose function. 
+ * 
+ * This returns the number of different ways that k objects can be chosen from n objects.
+ * 
+ * @param n The size of the set of objects being chosen from.
+ * @param k The number of elemtents to choose from the set.
+ * 
+ * @returns The number of combinations that can be formed when k objects are chsosen from a set of n.
+*/
 uint64_t choose(uint64_t n, uint64_t k)
 {
   if (k == 0)
@@ -122,6 +140,11 @@ uint64_t choose(uint64_t n, uint64_t k)
   return (n * choose(n-1, k-1) / k);
 }
 
+/**
+ * Returns the boundary ID.
+ * 
+ * NEED TO DOCUMENT THIS FURTHER.
+*/
 uint32_t boundary_id(const uint64_t missing_axis, const uint64_t finalDim)
 {
   uint32_t ret = 1;
@@ -200,7 +223,7 @@ Tensor<1,dim> create_sigma_vector(const uint32_t b_id, const Tensor<1,TensorDim>
 }
 
 // ### MMS Solution ###
-// #ifdef MMS
+#ifdef MMS
 template <int dim>
 class Solution: public Function<dim>
 {
@@ -250,7 +273,7 @@ Tensor<1,dim> Solution<dim>::gradient(const Point<dim> &p,
   return ret;
 }
 
-// #endif
+#endif
 // ## End of MMS Solution ##
 
 
